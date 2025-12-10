@@ -11,7 +11,8 @@ The problem statement and its associated data can be found on the following [web
 ## Overview
 This project covers several approaches, including evolutionary algorithms, reinforcement learning techniques, direct single-shooting methods, and indirect optimal-control shooting.
 
-## Repository structure 
+## Repository structure
+'''
 GTOC13-Trajectory-Optimization/   
 │   
 ├── src/                 # Core source code (dynamics, optimization, utilities)   
@@ -19,7 +20,7 @@ GTOC13-Trajectory-Optimization/
 ├── notebooks/           # Jupyter notebooks for analysis and visualization   
 ├── results/             # Example outputs, plots, logs   
 └── README.md            # Project documentation   
-
+'''
 
 ## Installation
 Clone the repository:
