@@ -6,9 +6,6 @@ This work does **not** reproduce the best-known solution achieved by the *School
 However, this repository explores multiple optimization strategies for the GTOC13 problem and demonstrates how to reach a solution scoring around 50 points (not officially validated by the competition checker).
 
 
-
-
-
 The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 problem, and will later be complemented by a detailed guide explaining the implemented techniques and modeling choices.
 
 The problem statement and associated data can be found on the following [website](https://gtoc.jpl.net/gtoc13/).
@@ -26,17 +23,6 @@ This project covers several approaches, including:
 ---
 
 ## Repository Structure
-
-
-
-The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 Problem it will later be complemented by a detailed guide explaining the implemented techniques and modeling choices.
-
-The problem statement and its associated data can be found on the following [website](https://gtoc.jpl.net/gtoc13/)
-
-## Overview
-This project covers several approaches, including evolutionary algorithms, reinforcement learning techniques, direct single-shooting methods, and indirect optimal-control shooting.
-
-## Repository structure
 ```
 GTOC13-Trajectory-Optimization/   
 │   
@@ -47,18 +33,21 @@ GTOC13-Trajectory-Optimization/
 └── README.md            # Project documentation   
 ```
 
+--- 
+
 ## Installation
 Clone the repository:
 ```bash
 git clone https://github.com/floriancal/GTOC13-Trajectory-Optimization.git'
 python main.py
 ```
+---
 
 ## Dependencies 
 This project depends on the PyKEP library, released under the GPL license, which can be installed from the following [PyKep Documentation](https://esa.github.io/pykep/)
 
 
-
+---
 
 
 ## 🤝 Contributions
