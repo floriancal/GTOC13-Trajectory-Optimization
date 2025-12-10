@@ -46,6 +46,7 @@ python main.py
 
 ## Dependencies 
 This project depends on the PyKEP library, released under the GPL license, which can be installed from the following [PyKep Documentation](https://esa.github.io/pykep/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2575462.svg)](https://doi.org/10.5281/zenodo.2575462)
 Dario Izzo. (2019). esa/pykep: Bug fixes and more support on Equinoctial Elements (v2.3). Zenodo. https://doi.org/10.5281/zenodo.2575462
 
 
