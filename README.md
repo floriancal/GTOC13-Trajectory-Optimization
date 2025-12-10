@@ -1,3 +1,4 @@
+![Python](https://img.shields.io/badge/Python-3.11-blue.svg)
 # GTOC13-Trajectory-Optimization
 
 This repository contains trajectory optimization code developed for the Global Trajectory Optimization Competition 13 (GTOC13) by the team **Yume Space**.  
