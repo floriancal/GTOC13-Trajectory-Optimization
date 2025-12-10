@@ -24,8 +24,10 @@ GTOC13-Trajectory-Optimization/
 
 ## Installation
 Clone the repository:
-'git clone https://github.com/floriancal/GTOC13-Trajectory-Optimization.git'
-'python main.py'
+```
+git clone https://github.com/floriancal/GTOC13-Trajectory-Optimization.git'
+python main.py
+```
 
 ## Dependencies 
 This project depends on the PyKEP library, released under the GPL license, which can be installed from the following [PyKep Documentation](https://esa.github.io/pykep/)
@@ -34,6 +36,6 @@ This project depends on the PyKEP library, released under the GPL license, which
 
 
 
-🤝 Contributions
+## 🤝 Contributions
 Contributions, suggestions, and improvements are welcome.
 Feel free to open an issue or submit a pull request.
