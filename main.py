@@ -30,7 +30,7 @@ V0_max = 50000
 
 # What to execute
 initial_point_search = False  # Not to be runned each time, this builds a table of velocity/position and times vectors at first body encounter as a function of the initial state of the problem
-first_two_legs_search = False # Wether to compute or reuse the choice of the two firsts conic legs
+first_two_legs_search = True # Wether to compute or reuse the choice of the two firsts conic legs
 sequence_search = True  # Wether to run the flybys sequence search or not
 solve_solar_sail_arcs = True  # Wether to run the solving of the sail arcs
 only_refine = False  # Wether to only run the refinement of the solar sail solving of controlled arcs (the solving process is divided in two steps)
@@ -261,6 +261,7 @@ while True:
     if sequence_search == True:
         
         if first_two_legs_search == True:
+            print("Begining orbital period reduction legs..")
             # Reading the previously builded file
             shield_burned, V0_list, VFMIN_list, L_list, tp_list, pos_list = read_init_pos(
                 "init_pos.csv"
@@ -274,80 +275,117 @@ while True:
 
             # Solve the two first legs problem
             planet_init = planets[body_aimed]
-
-            t, r_init, v_init, r1_fb1, v1_fb1, tof_fb1, body_id_fb2, r2_body_j, v1, v2, r2, tof2 = leg_cost(
-                planets,
-                tp,
-                MU_ALTAIRA,
-                max_revs_lmbrt,
-                shield_burned,
-                planet_init,
-                body_aimed,
-                V0,
-                VFMIN,
-                L,
-                pos_list,
-            )
             
-            # two first legs are now obtained, prepare to compute the rest of the sequence 
-            shield_burned = False
-            # Proimity constraint calculation
-            tof_for_min_radius = time_of_flight(r_init, v_init, r1_fb1, v1_fb1, MU_ALTAIRA)
-            rmin = min_radius_calc(r_init, v_init, r1_fb1, v1_fb1, tof_for_min_radius)
-            rmin = np.array(rmin)
-            if rmin < 0.01 * AU:
-                print(rmin)
-                raise Exception(
-                    "Rmin too small on first leg"
-                )  # This is not supposed to happen and should be protected in leg_cost
-            elif rmin > 0.01 * AU and rmin < 0.05 * AU:
-                shield_burned = True
-
-            if t < t_max:
-                new_flyby = {
-                    "body_id": body_aimed,
-                    "r_hat": r1_fb1 / np.linalg.norm(r1_fb1),
-                    "Vinf": np.linalg.norm(v1_fb1),
-                    "is_science": True,
-                    "r2": r1_fb1,
-                    "v2": v1_fb1,
-                    "tof": tof_fb1,
-                    "dv_left": [0, 0, 0],
-                    "vout": [0, 0, 0],
-                    "v1": [0, 0, 0],
-                    "shield_burned": shield_burned,
-                }
-
-                # Add to the flybies list
-                flybys.append(new_flyby)
-                # Score computation
-                J = objective(flybys)
+            while True:
+                t, r_init, v_init, r1_fb1, v1_fb1, tof_fb1, body_id_fb2, r2_body_j, v1, v2, r2, tof2 = leg_cost(
+                    planets,
+                    tp,
+                    MU_ALTAIRA,
+                    max_revs_lmbrt,
+                    shield_burned,
+                    planet_init,
+                    body_aimed,
+                    V0,
+                    VFMIN,
+                    L,
+                    pos_list,
+                )
+                
+                # two first legs are now obtained, prepare to compute the rest of the sequence 
+                shield_burned = False
+                # Proimity constraint calculation
+                tof_for_min_radius = time_of_flight(r_init, v_init, r1_fb1, v1_fb1, MU_ALTAIRA)
+                rmin = min_radius_calc(r_init, v_init, r1_fb1, v1_fb1, tof_for_min_radius)
+                rmin = np.array(rmin)
+                if rmin < 0.01 * AU:
+                    print(rmin)
+                    raise Exception(
+                        "Rmin too small on first leg"
+                    )  # This is not supposed to happen and should be protected in leg_cost
+                elif rmin > 0.01 * AU and rmin < 0.05 * AU:
+                    shield_burned = True
 
                 if t < t_max:
-                    # Second flyby
                     new_flyby = {
-                        "body_id": body_id_fb2,
-                        "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
-                        "Vinf": np.linalg.norm(v2),
+                        "body_id": body_aimed,
+                        "r_hat": r1_fb1 / np.linalg.norm(r1_fb1),
+                        "Vinf": np.linalg.norm(v1_fb1),
                         "is_science": True,
-                        "r2": r2,
-                        "v2": v2,
-                        "tof": tof2,
+                        "r2": r1_fb1,
+                        "v2": v1_fb1,
+                        "tof": tof_fb1,
                         "dv_left": [0, 0, 0],
-                        "vout": v1,
-                        "v1": v1,
+                        "vout": [0, 0, 0],
+                        "v1": [0, 0, 0],
                         "shield_burned": shield_burned,
                     }
-                    t = t + tof2
-                    # Add to flyby list
-                    flybys.append(new_flyby)
-                    # Compute score
-                    J = objective(flybys)
-                    # saving flybys
-                    save_flybys_to_csv(flybys, filename="flyby_first_two_legs.csv")
 
-                else:
-                    print("First segment is already > t_max : ", t / 86400 / 365.25)
+                    # Add to the flybies list
+                    flybys.append(new_flyby)
+                    # Score computation
+                    J = objective(flybys)
+
+                    if t < t_max:
+                        # Second flyby
+                        new_flyby = {
+                            "body_id": body_id_fb2,
+                            "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
+                            "Vinf": np.linalg.norm(v2),
+                            "is_science": True,
+                            "r2": r2,
+                            "v2": v2,
+                            "tof": tof2,
+                            "dv_left": [0, 0, 0],
+                            "vout": v1,
+                            "v1": v1,
+                            "shield_burned": shield_burned,
+                        }
+                        t = t + tof2
+                        # Add to flyby list
+                        flybys.append(new_flyby)
+                        # Compute score
+                        J = objective(flybys)
+                        # saving flybys
+                        save_flybys_to_csv(flybys, filename="flyby_first_two_legs.csv")
+                        
+                        
+                        # Now goal is to evaluate orbital period to find a reasonable one, if not for now iterate 
+                        flybys = build_sequence(
+                            J,
+                            t,
+                            flybys,
+                            bodies,
+                            0,
+                            planets[10].compute_period(),
+                            100,
+                            t_max,
+                            max_revs_lmbrt,
+                            planets,
+                            orbital_period_search = True 
+                        )
+                        
+                        # At the last flyby 
+                        r_last = flybys[-1]["r2"]
+                        v_last = flybys[-1]["v2"]
+                        
+                        # Orbital period ? 
+                        el_orb_search = pk.ic2par(r1,v1)
+                        # Mandatory direct shot
+                        if el_orb_search[1] > 1:
+                            T = np.inf              
+                        else:         
+                            T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
+                        
+                        print("orbital period at end of scan n is", T)
+                        print("target is ", planets[10].compute_period())
+                        if T < planets[10].compute_period():
+                            break
+                            
+                        
+
+                    else:
+                        print("First segment is already > t_max : ", t / 86400 / 365.25)
+                        break
                 
                 # Save t for next runs in addition to the flybys dict
                 with open("t.pkl", "wb") as f:
@@ -363,8 +401,7 @@ while True:
         # Initial state is the state of the last flyby 
         with open("t.pkl", "rb") as f:
             t = pickle.load(f)
-        r1 = flybys[-1]["r2"]
-        v1_fb1 = flybys[-1]["v2"]
+        
                 
         flybys = build_sequence(
             J,
@@ -376,8 +413,7 @@ while True:
             tof_tries_nb,
             t_max,
             max_revs_lmbrt,
-            r1,
-            v1_fb1,
+            bodies,
         )
         save_flybys_to_csv(flybys, filename="flybys_first_row.csv")
 

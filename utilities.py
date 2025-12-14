@@ -1500,10 +1500,15 @@ def build_sequence(
     tof_tries_nb,
     t_max,
     max_revs_lmbrt,
-    r1,
-    vin_fb,
+    bodies_to_parse,
+    orbital_period_search = False,
     body_excluded=None,
 ):
+    
+    # Initial state 
+    r1 = flybys[-1]["r2"]
+    vin_fb = flybys[-1]["v2"]
+    
     ## Début de la recherche de la séquence
     print("begining optimal sequence search")
     max_revs_lmbrt = 100
@@ -1521,8 +1526,9 @@ def build_sequence(
         body_j_before = bodies[body_j_before_id]
         r_beg, vp_dep = body_j_before.eph(t / 86400)
         for i in range(len(tof)):
-
-            for body_id, body_j in bodies.items():
+            
+            # We only parse requested objects --> can be bodies (all) or only planets
+            for body_id, body_j in bodies_to_parse.items():
                 if body_id != body_excluded and body_id != flybys[-1]["body_id"]:
 
                     # get r2 at t + tof --> planet at end of leg
@@ -1582,23 +1588,19 @@ def build_sequence(
                                 dv_req = pk.fb_vel(
                                     vin_fb_plf, v_init_lmbrt_plf, body_j_before
                                 )
-                                ##              v2_eq, delta_ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, body_j_before)
-                                ##              cos_angle = cos_angle_between(vin_fb_plf, v_init_lmbrt_plf)
-                                ##
-                                
 
-                                ax.cla()  # clear the current axes
-                                for i in range(len(planets)-1):
-                                     planet_plot = planets[i+1]
-                                     pk.orbit_plots.plot_planet(planet_plot, color='b', axes=ax)
+                                #ax.cla()  # clear the current axes
+                                #for i in range(len(planets)-1):
+                                #     planet_plot = planets[i+1]
+                                #     pk.orbit_plots.plot_planet(planet_plot, color='b', axes=ax)
 
-                                pk.orbit_plots.plot_kepler(r0 = r1, v0 = vin_fb, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60)
-                                print('Printing output traj from planet without flyby in tof')
-                                pk.orbit_plots.plot_kepler(r0 = r1, v0 = v1, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60, color='g')
-                                print('Printing required traj from planet to meet target')
-                                print('Solution number:',k)
-                                plt.show(block=False)
-                                plt.pause(0.1)
+                                #pk.orbit_plots.plot_kepler(r0 = r1, v0 = vin_fb, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60)
+                                #print('Printing output traj from planet without flyby in tof')
+                                #pk.orbit_plots.plot_kepler(r0 = r1, v0 = v1, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60, color='g')
+                                #print('Printing required traj from planet to meet target')
+                                #print('Solution number:',k)
+                                #plt.show(block=False)
+                                #plt.pause(0.1)
 
                                 if dv_req < 200:
                                     tof_start = tof[i]
@@ -1672,6 +1674,24 @@ def build_sequence(
                                     dv_left = [0, 0, 0]
                                     vout = v1
                                     status = True
+                                    
+                                    # We measure the anomaly flied around the arc, if superior to half a period its not acceptable 
+                                    if orbital_period_search:
+                                        el_orb_search = pk.ic2par(r1,v1)
+                                        
+                                        # Mandatory direct shot
+                                        if el_orb_search[1] > 1:
+                                            status = True
+                                            
+                                        else:
+                                            
+                                            T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
+                                            
+                                            if tof[i]/T > 0.5:
+                                                status = False
+                                            else:
+                                                status = True
+  
                                 if status is True:
 
                                     # objective computation list (body, tof, J)
@@ -1717,8 +1737,14 @@ def build_sequence(
             flybys.append(best_flyby)
             # Calcul du score
             J = objective(flybys)
+            
+            
+            
+             
         else:
             break
+            
+        
     print("Planet sequence builded !")
     # saving flybys
     save_flybys_to_csv(flybys)
@@ -1937,15 +1963,14 @@ def leg_cost(
             if body_id != body_aimed:
                 best_res = np.inf
 
-                # minimize tof pb
-                tofx = 100 * 86400
-                table = 20000
-                par = [tofx, table, np.pi / 2]
+                # minimize pb parameters are [tof, V0 (s/c velocity at mission beginnin), L (orbital posiiton of planet Vulcan at encounter]
                 bounds = [
                     (1.0, 86400 * 365.25 * 10),
                     (5000, 50000),
                     (1.745329, 2.268928),
                 ]
+                
+                # Start with a random guess
                 par_random = [np.random.uniform(low, high) for (low, high) in bounds]
                 par = par_random
                 res = minimize(
@@ -1968,9 +1993,9 @@ def leg_cost(
                     method="L-BFGS-B",
                     bounds=bounds,
                     options={"maxiter": 2000},
-                )  #'xatol': 1e-18, 'fatol': 0.1})
-
-                if res.fun < best_res:  # True: #
+                ) 
+            
+                if res.fun < tol: 
                     print("resultat optim 1")
                     print(res.fun)
                     tofbest = res.x[0]
@@ -1991,164 +2016,155 @@ def leg_cost(
                         period,
                     )
                     best_res = res.fun
-                    # v1,v2, r2,dv_req_best = update_lmbrt_params(tofbest, best_t,  body_j_best, best_vin,  100, planet_init, period, n_period )
+                    print("accceptable solution found")
+                    print("tryig to transform into a perfect conic arc")
+                    
 
-                    if best_res < tol:  # True: #
-                        print("accceptable solution found")
-                        print("tryig to transform into a perfect conic arc")
+                    # 2nd minimize sequence
+                    # Les parametres sont Y0 Z0 V0 L(planet_init_state) tof(flight time from planet 1 to planet 2)
 
-                        # 2nd minimize sequence
-                        # Les parametres sont Y0 Z0 V0 L(planet_init_state) tof(flight time from planet 1 to planet 2)
+                    par = [
+                        best_pos[1] / AU,
+                        best_pos[2] / AU,
+                        V0_best,
+                        L_best,
+                        tofbest / 1e8,
+                    ]
 
-                        par = [
-                            best_pos[1] / AU,
-                            best_pos[2] / AU,
-                            V0_best,
-                            L_best,
-                            tofbest / 1e8,
-                        ]
-                        ##            par = [ 6.35958664e-01, -8.13933805e-12,  1.42005569e+04,  1.75571804e+00, 1.35069763e+00]
-                        ##            body_id = 5
-                        ##            body_id_best = body_id
-                        ##            n_period = 1
-                        ##            body_j = planets[5]
-                        ##            body_j_best = body_j
+                    res_f = run_with_timeout(
+                        minimize_not_blocked,
+                        (
+                            distance_vector_and_leg_cost,
+                            par,
+                            period,
+                            n_period,
+                            planet_init,
+                            body_j,
+                            MU_ALTAIRA,
+                            shield_burned,
+                            V0,
+                            VFMIN,
+                            L,
+                            t,
+                            pos_list,
+                        ),
+                        timeout=60,
+                    )
 
-                        res_f = run_with_timeout(
-                            minimize_not_blocked,
-                            (
-                                distance_vector_and_leg_cost,
-                                par,
-                                period,
-                                n_period,
-                                planet_init,
-                                body_j,
-                                MU_ALTAIRA,
-                                shield_burned,
-                                V0,
-                                VFMIN,
-                                L,
-                                t,
-                                pos_list,
-                            ),
-                            timeout=60,
-                        )
-                        print(res_f)
+                    if res_f != False and res_f != None:
+                        if res_f.fun < res_f_best:
+                            res_f_best = res_f.fun
+                            print("new minimum")
+                            print(res_f_best)
+                            if res_f_best < 1:
 
-                        if res_f != False and res_f != None:
-                            if res_f.fun < res_f_best:
-                                res_f_best = res_f.fun
-                                print("new minimum")
-                                print(res_f_best)
-                                if res_f_best < 1:
+                                print("On converge !")
+                                print(res_f.x)
+                                print(body_id)
+                                print(n_period)
+                                # Point initial
+                                r_init = [
+                                    -200 * AU,
+                                    res_f.x[0] * AU,
+                                    res_f.x[1] * AU,
+                                ]
+                                v_init = [res_f.x[2], 0, 0]
 
-                                    print("On converge !")
-                                    print(res_f.x)
-                                    print(body_id)
-                                    print(n_period)
-                                    # Point initial
-                                    r_init = [
-                                        -200 * AU,
-                                        res_f.x[0] * AU,
-                                        res_f.x[1] * AU,
-                                    ]
-                                    v_init = [res_f.x[2], 0, 0]
+                                # Etat de la planète à la rencontre
+                                r0, v0 = planet_init.eph(0)
+                                Elp = np.array(pk.ic2eq(r0, v0, MU))
+                                el0 = np.array(pk.ic2par(r0, v0, MU))
+                                Elp[5] = res_f.x[3]
+                                rp, vp = pk.eq2ic(eq=list(Elp), mu=MU)
 
-                                    # Etat de la planète à la rencontre
-                                    r0, v0 = planet_init.eph(0)
-                                    Elp = np.array(pk.ic2eq(r0, v0, MU))
-                                    el0 = np.array(pk.ic2par(r0, v0, MU))
-                                    Elp[5] = res_f.x[3]
-                                    rp, vp = pk.eq2ic(eq=list(Elp), mu=MU)
+                                # temps au premier passage
+                                tp_first_pass = time_of_flight(r0, v0, rp, vp, MU)
 
-                                    # temps au premier passage
-                                    tp_first_pass = time_of_flight(r0, v0, rp, vp, MU)
+                                # écart obtenu
+                                t_best, d_best = minimize_distance_bisection(
+                                    r_init,
+                                    v_init,
+                                    rp,
+                                    vp,
+                                    MU_ALTAIRA,
+                                    T=365.25 * 200 * 86400,  # search window
+                                )
 
-                                    # écart obtenu
-                                    t_best, d_best = minimize_distance_bisection(
-                                        r_init,
-                                        v_init,
-                                        rp,
-                                        vp,
-                                        MU_ALTAIRA,
-                                        T=365.25 * 200 * 86400,  # search window
-                                    )
+                                # Etat du sc à la rencontre
+                                rf, vf = pk.propagate_lagrangian(
+                                    r_init, v_init, t_best, MU_ALTAIRA
+                                )
+                                print("écart mesuré avec la planète après optim")
+                                print(np.array(rf) - np.array(rp))
 
-                                    # Etat du sc à la rencontre
-                                    rf, vf = pk.propagate_lagrangian(
-                                        r_init, v_init, t_best, MU_ALTAIRA
-                                    )
-                                    print("écart mesuré avec la planète après optim")
-                                    print(np.array(rf) - np.array(rp))
+                                # Temps réel à la rencontre
+                                while tp_first_pass < t_best:
+                                    tp_first_pass = tp_first_pass + period
 
-                                    # Temps réel à la rencontre
-                                    while tp_first_pass < t_best:
-                                        tp_first_pass = tp_first_pass + period
+                                # On ajoute le n periode supplémentaire du aux choix de l'optim d'attendre
+                                t = tp_first_pass + period * n_period
 
-                                    # On ajoute le n periode supplémentaire du aux choix de l'optim d'attendre
-                                    t = tp_first_pass + period * n_period
+                                # valeurs pour le premier élément du dico flybys
+                                r1_fb1 = rf
+                                v1_fb1 = vf
+                                tof_fb1 = t_best
+                                # valeurs pour le second elem du dico flyby
 
-                                    # valeurs pour le premier élément du dico flybys
-                                    r1_fb1 = rf
-                                    v1_fb1 = vf
-                                    tof_fb1 = t_best
-                                    # valeurs pour le second elem du dico flyby
+                                body_id_fb2 = body_id_best
+                                r2_body_j, v = body_j_best.eph(
+                                    (t + res_f.x[4] * 1e8) / 86400
+                                )
 
-                                    body_id_fb2 = body_id_best
-                                    r2_body_j, v = body_j_best.eph(
-                                        (t + res_f.x[4] * 1e8) / 86400
-                                    )
+                                v1, v2, r2, dv_req_best = update_lmbrt_params(
+                                    r1_fb1,
+                                    res_f.x[4] * 1e8,
+                                    tp_first_pass,
+                                    body_j_best,
+                                    v1_fb1,
+                                    100,
+                                    planet_init,
+                                    period,
+                                    n_period,
+                                )
 
-                                    v1, v2, r2, dv_req_best = update_lmbrt_params(
-                                        r1_fb1,
-                                        res_f.x[4] * 1e8,
-                                        tp_first_pass,
-                                        body_j_best,
-                                        v1_fb1,
-                                        100,
-                                        planet_init,
-                                        period,
-                                        n_period,
-                                    )
+                                # As v1 can integrate a small velocity error along the arc the position error at arrival might blow, its better to obtain exact v1
 
-                                    # As v1 can integrate a small velocity error along the arc the position error at arrival might blow, its better to obtain exact v1
+                                print("dv_req after calc :", dv_req_best)
+                                print("compared to minimizer outputs :", res_f.fun)
 
-                                    print("dv_req after calc :", dv_req_best)
-                                    print("compared to minimizer outputs :", res_f.fun)
+                                rtest, vtest = body_j_best.eph(
+                                    (res_f.x[4] * 1e8 + t) / 86400
+                                )
+                                print("valeur testé :", rtest)
+                                print("at time, :", res_f.x[4] * 1e8 + t)
+                                print("r outputed:", r2)
 
-                                    rtest, vtest = body_j_best.eph(
-                                        (res_f.x[4] * 1e8 + t) / 86400
-                                    )
-                                    print("valeur testé :", rtest)
-                                    print("at time, :", res_f.x[4] * 1e8 + t)
-                                    print("r outputed:", r2)
+                                # save data
+                                data = {
+                                    "r_init": r_init,
+                                    "v_init": v_init,
+                                    "tp_first_pass": tp_first_pass,
+                                    "t": t,
+                                    "t_best": t_best,
+                                }
+                                np.save(
+                                    "save_state.npy", data
+                                )  # écrase le fichier à chaque fois
 
-                                    # save data
-                                    data = {
-                                        "r_init": r_init,
-                                        "v_init": v_init,
-                                        "tp_first_pass": tp_first_pass,
-                                        "t": t,
-                                        "t_best": t_best,
-                                    }
-                                    np.save(
-                                        "save_state.npy", data
-                                    )  # écrase le fichier à chaque fois
-
-                                    return (
-                                        t,
-                                        r_init,
-                                        v_init,
-                                        r1_fb1,
-                                        v1_fb1,
-                                        tof_fb1,
-                                        body_id_fb2,
-                                        r2_body_j,
-                                        v1,
-                                        v2,
-                                        r2,
-                                        res_f.x[4] * 1e8,
-                                    )
+                                return (
+                                    t,
+                                    r_init,
+                                    v_init,
+                                    r1_fb1,
+                                    v1_fb1,
+                                    tof_fb1,
+                                    body_id_fb2,
+                                    r2_body_j,
+                                    v1,
+                                    v2,
+                                    r2,
+                                    res_f.x[4] * 1e8,
+                                )
 
     return (
         t,
@@ -2198,10 +2214,10 @@ def distance_vector_and_leg_cost(
     rf2 = np.array(rf2, dtype=float)
     vf2 = np.array(vf2, dtype=float)
 
-    # rf, vf, info = state_at_perigee_from_rv(rf, vf, MU)
     t_best, d_best = minimize_distance_bisection(
         rf, vf, rf2, vf2, MU, T=365.25 * 200 * 86400  # search window
     )
+    
 
     tp_first_pass = time_of_flight(r0, v0, rf2, vf2, MU)
 
@@ -2213,12 +2229,11 @@ def distance_vector_and_leg_cost(
 
     rin, vin_fb = pk.propagate_lagrangian(rf, vf, t_best, MU)
 
-    # vin_fb,t,pos = get_vin_fb_t([tof, par[2], L ], V0, VFMIN, Llist, t_list, pos_list,  planet_init, MU_ALTAIRA, period)
-    # dv_req2 = get_min_dv([tof, par[2], L ],t_list,  MU_ALTAIRA, 100, shield_burned,   planet_init,  body_j, n_period, period, V0,VFMIN,Llist, pos_list)
 
     dv_req = get_min_dv_real(
         tof, t, MU, 100, shield_burned, vin_fb, planet_init, body_j
     )
+
 
     return d_best / 100 + dv_req * 10000  #
 
