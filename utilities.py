@@ -15,6 +15,8 @@ from scipy.interpolate import RegularGridInterpolator
 import os
 import shutil
 from datetime import datetime
+import threading
+import random
 
 
 
@@ -52,6 +54,7 @@ def find_contact(tof, rf, vf, rf_min, MU):
     float
         Euclidean distance between propagated position and rf_min.
     """
+
     tof = float(np.atleast_1d(tof)[0])
     rf, vf = pk.propagate_lagrangian(r0=rf, v0=vf, tof=tof, mu=MU)
     cost = np.linalg.norm(np.array(rf) - np.array(rf_min))
@@ -125,18 +128,7 @@ def load_bodies_from_csv(filename, mu_default=0.0):
 
     return bodies
     
-# lets check trajectory visually at each run 
-import matplotlib.pyplot as plt
-planets = load_bodies_from_csv("gtoc13_planets.csv")
 
-plt.ion()   # mode interactif
-ax = None
-for i in range(len(planets)-1):
-     planet_plot = planets[i+1]
-     ax = pk.orbit_plots.plot_planet(planet_plot, color='b', axes=ax)
-
-plt.show()
-plt.pause(0.001)
 def read_init_pos(filename="init_pos.csv"):
     """
     Read the CSV file 'init_pos.csv' and return several lists of data.
@@ -215,11 +207,69 @@ def read_init_pos(filename="init_pos.csv"):
 
 
 def time_find(par, V0, rf_min, vf_min, rf2_min, vf2_min, el_p, planet_init):
+    """
+    Determine the reference epoch and time-of-flight associated with a two-leg
+    trajectory involving an initial spacecraft propagation and a planetary
+    encounter, by numerically searching for contact times.
 
+    This function computes:
+      1) The time-of-flight from an initial spacecraft state to a first target
+         position (first leg).
+      2) The absolute time at which the target planet reaches the impact point.
+      3) The corresponding initial epoch offset such that both events are
+         time-consistent.
+
+    The time-of-flight searches are performed using a brute-force numerical
+    minimization (Nelder–Mead) of a contact residual function.
+
+    Parameters
+    ----------
+    par : array-like
+        Array of optimization parameters. The first element is used
+        to define the initial spacecraft position along the y-axis.
+    V0 : float
+        Initial spacecraft velocity magnitude along the x-axis (m/s).
+    rf_min : array-like
+        Target position vector (m) for the first leg contact.
+    vf_min : array-like
+        Target velocity vector (m/s) for the first leg contact.
+    rf2_min : array-like
+        Target planet position vector (m) at the impact/contact point.
+    vf2_min : array-like
+        Target planet velocity vector (m/s) at the impact/contact point.
+    el_p : array-like
+        Classical orbital elements of the planet at the reference epoch.
+        Expected ordering: [a, e, i, RAAN, ω, E]
+    planet_init : object
+        Planet object
+
+    Returns
+    -------
+    t0 : float
+        Initial epoch offset (s), defined such that:
+        t0 + tof_init = tp_first_pass.
+    tp_first_pass : float
+        Absolute time (s) at which the planet reaches the impact point.
+    tof_init : float
+        Time-of-flight (s) from the spacecraft initial state to the first
+        contact point.
+
+    Notes
+    -----
+    - The initial spacecraft state is constructed as:
+        rf = [-200 * AU, par[0], 0]
+        vf = [V0, 0, 0]
+    - The time-of-flight is obtained by minimizing a contact residual using
+      the Nelder–Mead method with tight tolerances.
+    - Planetary timing is estimated analytically using mean anomaly propagation,
+      then refined with a second numerical minimization.
+    - Multiple planetary revolutions are handled by estimating the number of
+      full orbits elapsed during the time-of-flight.
+    """
     # obtain tof from initial point to first planet (first leg)
     rf = [-200 * AU, par[0], 0]
     vf = [V0, 0, 0]
-    # Recherche du tof (méthode bourrine)
+   
     current_guess = 10 * 86400 * 365.25
     res_try = minimize(
         find_contact,
@@ -243,20 +293,20 @@ def time_find(par, V0, rf_min, vf_min, rf2_min, vf2_min, el_p, planet_init):
         M_impact_pl = orbital.utilities.mean_anomaly_from_eccentric(el_2[1], el_2[5])
         M_0_pl = orbital.utilities.mean_anomaly_from_eccentric(el_p[1], el_p[5])
 
-        # mouvement moyen (rad/s)
+        # mean movement (rad/s)
         mean_mov_pl = np.sqrt(MU_ALTAIRA / el_2[0] ** 3)
 
-        # différence d'anomalies moyennes modulo 2π
+        # difference of mean anomalies modulo 2π
         dM = (M_impact_pl - M_0_pl) % (2 * np.pi)
 
-        # si on doit parcourir plusieurs orbites (par ex. tof > période)
+        # More than 1 orbit tof > period
         period_pl = 2 * np.pi / mean_mov_pl
         n_orbits = int(np.floor(tof_init / period_pl))
 
-        # temps associé à la position d'impact
+        # time associated at impact
         tp_first_pass = (dM / mean_mov_pl) + n_orbits * period_pl
 
-        # Boucle de précision
+        # Precision loop
         rp0, vp0 = planet_init.eph(pk.epoch(0))
         current_guess = tp_first_pass
         res_try = minimize(
@@ -274,7 +324,7 @@ def time_find(par, V0, rf_min, vf_min, rf2_min, vf2_min, el_p, planet_init):
         else:
             print("tof_init finding residual is :", res_try.fun)
 
-        # initialisation de l'origine temporelle
+        # Time at mission begin
         t0 = tp_first_pass - tof_init
 
         return t0, tp_first_pass, tof_init
@@ -282,12 +332,58 @@ def time_find(par, V0, rf_min, vf_min, rf2_min, vf2_min, el_p, planet_init):
 
 
 def distance_vector_gen(par, V0, rf2, vf2, MU):
+    """
+    Compute the minimum distance between two Keplerian trajectories
+    over a fixed time window, using a bisection-based minimization.
+
+    The first object is initialized on the Z=0 plane at the x-axis  
+    initial -200 AU pos and a Y position given by par[0] an
+    initial velocity along the +x direction. Its state is first
+    propagated to perigee. The second object is defined by its
+    initial Cartesian state (position and velocity).
+
+    The function searches for the time of closest approach between
+    the two objects within a given time window after perigee.
+
+    Parameters
+    ----------
+    par : array_like
+        Parameter vector. Only `par[0]` is used and represents the
+        initial y-offset (impact parameter) of the first object [m].
+    V0 : float
+        Initial velocity magnitude of the first object along the
+        x-axis [m/s].
+    rf2 : array_like, shape (3,)
+        Initial position vector of the second object in an inertial
+        frame [m].
+    vf2 : array_like, shape (3,)
+        Initial velocity vector of the second object in an inertial
+        frame [m/s].
+    MU : float
+        Standard gravitational parameter of the central body [m³/s²].
+
+    Returns
+    -------
+    t_best : float
+        Time since perigee at which the distance between the two
+        objects is minimal [s].
+    d_best : float
+        Minimum Euclidean distance between the two objects over the
+        search window [m].
+
+    Notes
+    -----
+    - The closest-approach search is performed using a bisection-based
+      minimization over a fixed time interval.
+    - Motion is assumed to be purely Keplerian (two-body dynamics).
+    - The first object's initial position is fixed at -200 AU on the
+      x-axis.
+    """
 
     # Initial state of object 1
     rf = np.array([-200 * AU, par[0], 0], dtype=float)
     vf = np.array([V0, 0, 0], dtype=float)
 
-    # t0 = time_to_perigee(rf, vf, MU)
 
     # Ensure rf2 and vf2 are numpy float arrays
     rf2 = np.array(rf2, dtype=float)
@@ -296,41 +392,156 @@ def distance_vector_gen(par, V0, rf2, vf2, MU):
     rf, vf, info = state_at_perigee_from_rv(rf, vf, MU)
 
     t_best, d_best = minimize_distance_bisection(
-        rf, vf, rf2, vf2, MU, T=8 * 86400  # search window
+        rf, vf, rf2, MU, T=8 * 86400  # search window
     )
     return t_best, d_best
 
 
-def distance_vector(par, V0, rf2, vf2, MU):
+def distance_vector(par, V0, rf2, MU):
+    """
+    Compute the minimum distance between two Keplerian trajectories
+    over a fixed time window, using a bisection-based minimization.
 
+    The first object is initialized on the Z=0 plane at the x-axis  
+    initial -200 AU pos and a Y position given by par[0] an
+    initial velocity along the +x direction. Its state is first
+    propagated to perigee. The second object is defined by its
+    initial Cartesian state (position and velocity).
+
+    The function searches for the time of closest approach between
+    the two objects within a given time window after perigee.
+    
+    Equivalent to distance_vector_gen but with one output to be used as
+    a cost function in minimize process.
+
+    Parameters
+    ----------
+    par : array_like
+        Parameter vector. Only `par[0]` is used and represents the
+        initial y-offset (impact parameter) of the first object [m].
+    V0 : float
+        Initial velocity magnitude of the first object along the
+        x-axis [m/s].
+    rf2 : array_like, shape (3,)
+        Initial position vector of the second object in an inertial
+        frame [m].
+    MU : float
+        Standard gravitational parameter of the central body [m³/s²].
+
+
+    d_best : float
+        Minimum Euclidean distance between the two objects over the
+        search window [m].
+
+    Notes
+    -----
+    - The closest-approach search is performed using a bisection-based
+      minimization over a fixed time interval.
+    - Motion is assumed to be purely Keplerian (two-body dynamics).
+    - The first object's initial position is fixed at -200 AU on the
+      x-axis.
+    """
+    
     # Initial state of object 1
     rf = np.array([-200 * AU, par[0], 0], dtype=float)
     vf = np.array([V0, 0, 0], dtype=float)
 
     # Ensure rf2 and vf2 are numpy float arrays
     rf2 = np.array(rf2, dtype=float)
-    vf2 = np.array(vf2, dtype=float)
 
     rf, vf, info = state_at_perigee_from_rv(rf, vf, MU)
 
     t_best, d_best = minimize_distance_bisection(
-        rf, vf, rf2, vf2, MU, T=8 * 86400  # search window
+        rf, vf, rf2, MU, T=8 * 86400  # search window
     )
     return d_best
 
 
 ## Ensemble de fonction pour trouver le rapprochement maximal d'une orbite avec un point
-def dist_at_time(t, rf0, vf0, rf2, vf2, MU):
+def dist_at_time(t, rf0, vf0, rf2, MU):
+    """
+    Compute the distance between a propagated spacecraft position and a reference point at a given time.
+
+    The function propagates an initial state vector (position and velocity) using
+    Lagrangian propagation and returns the Euclidean distance between the propagated
+    position and a fixed reference position.
+
+    Parameters
+    ----------
+    t : float
+        Propagation time since the initial epoch [s].
+    rf0 : array_like, shape (3,)
+        Initial position vector in an inertial frame [m].
+    vf0 : array_like, shape (3,)
+        Initial velocity vector in an inertial frame [m/s].
+    rf2 : array_like, shape (3,)
+        Reference position vector (target point) in the same frame [m].
+    MU : float
+        Standard gravitational parameter of the central body [m³/s²].
+
+    Returns
+    -------
+    float
+        Euclidean distance between the propagated position and the reference point [m].
+
+    Notes
+    -----
+    - The propagation is performed using Lagrange coefficients via
+      `pk.propagate_lagrangian`.
+    """
     rf, vf = pk.propagate_lagrangian(rf0, vf0, t, MU)
     return np.linalg.norm(np.array(rf) - np.array(rf2))
 
 
-def bracket_minimum(f, rf0, vf0, rf2, vf2, MU, T, N=200):
+def bracket_minimum(f, rf0, vf0, rf2, MU, T, N=200):
+    """
+    Bracket the minimum of a scalar function over a time interval.
+
+    The function samples a scalar cost function (typically a distance)
+    over a symmetric time window [-T, T], identifies the discrete minimum,
+    and returns a triplet of times that brackets this minimum. 
+
+    Parameters
+    ----------
+    f : callable
+        Scalar function to be minimized. Must have the signature
+        `f(t, rf0, vf0, rf2, MU)` and return a float.
+    rf0 : array_like, shape (3,)
+        Initial position vector of the propagated object [m].
+    vf0 : array_like, shape (3,)
+        Initial velocity vector of the propagated object [m/s].
+    rf2 : array_like, shape (3,)
+        Reference position vector (target point) [m].
+    MU : float
+        Standard gravitational parameter of the central body [m³/s²].
+    T : float
+        Half-width of the search interval in time [s].
+        The function is evaluated over [-T, T].
+    N : int, optional
+        Number of sampling points in the interval (default is 200).
+
+    Returns
+    -------
+    t_left : float
+        Time just before the sampled minimum.
+    t_mid : float
+        Time at which the sampled minimum occurs.
+    t_right : float
+        Time just after the sampled minimum.
+
+    Notes
+    -----
+    - This routine performs a coarse, discrete search and does not guarantee
+      that the true continuous minimum lies inside the returned bracket if
+      the sampling resolution is insufficient.
+    - Increasing `N` improves robustness at the cost of additional function
+      evaluations.
+    """
     ts = np.linspace(-T, T, N)
     ds = []
 
     for t in ts:
-        ds.append(f(t, rf0, vf0, rf2, vf2, MU))
+        ds.append(f(t, rf0, vf0, rf2, MU))
 
     i = np.argmin(ds)
 
@@ -343,18 +554,18 @@ def bracket_minimum(f, rf0, vf0, rf2, vf2, MU, T, N=200):
     return ts[i - 1], ts[i], ts[i + 1]  # bracket (t_left, t_mid, t_right)
 
 
-def minimize_distance_bisection(rf0, vf0, rf2, vf2, MU, T, tol=1e-6):
+def minimize_distance_bisection(rf0, vf0, rf2, MU, T, tol=1e-6):
 
     f = dist_at_time
-    tL, tM, tR = bracket_minimum(f, rf0, vf0, rf2, vf2, MU, T)
+    tL, tM, tR = bracket_minimum(f, rf0, vf0, rf2, MU, T)
 
     # Dichotomy on interval [tL, tR]
     while abs(tR - tL) > tol:
         t1 = tL + (tR - tL) / 3.0
         t2 = tR - (tR - tL) / 3.0
 
-        d1 = f(t1, rf0, vf0, rf2, vf2, MU)
-        d2 = f(t2, rf0, vf0, rf2, vf2, MU)
+        d1 = f(t1, rf0, vf0, rf2, MU)
+        d2 = f(t2, rf0, vf0, rf2, MU)
 
         if d1 < d2:
             tR = t2
@@ -362,7 +573,7 @@ def minimize_distance_bisection(rf0, vf0, rf2, vf2, MU, T, tol=1e-6):
             tL = t1
 
     t_best = 0.5 * (tL + tR)
-    return t_best, f(t_best, rf0, vf0, rf2, vf2, MU)
+    return t_best, f(t_best, rf0, vf0, rf2, MU)
 
 
 def state_at_perigee_from_rv(r, v, mu, e_tol=1e-8, h_tol=1e-12):
@@ -525,7 +736,7 @@ def objective(flybys):
     b = grand_tour_bonus(flybys)
     c = 1
 
-    # grouper flybys par body_id
+    # take only science flybys
     flybys_by_body = defaultdict(list)
     for f in flybys:
         if f["is_science"]:
@@ -635,185 +846,6 @@ def calc_vmax_no_decel(v0, v_nom, a, T):
     return v_max
 
 
-def mean_anomaly_from_ecc(e, anomaly):
-    """
-    Returns the mean anomaly M (elliptic, parabolic, or hyperbolic)
-    from the given eccentricity e and anomaly (E or H).
-
-    Parameters
-    ----------
-    e : float
-        Eccentricity
-    anomaly : float
-        Eccentric (for e<1) or hyperbolic anomaly (for e>1)
-
-    Returns
-    -------
-    M : float
-        Mean anomaly
-    """
-    if e < 1.0:
-        return anomaly - e * np.sin(anomaly)
-    elif np.isclose(e, 1.0):
-        # Parabolic case: Barker's equation (approx.)
-        D = np.tan(anomaly / 2)
-        return D + D**3 / 3.0
-    else:  # e > 1
-        return e * np.sinh(anomaly) - anomaly
-
-
-
-def kepler_anomaly_from_mean(e, M, tol=1e-12, max_iter=60):
-    """
-    Retourne l'anomalie (E pour e<1, H pour e>1, D pour e≈1)
-    à partir du mean anomaly M.
-    Utilise : initial guess (Mikkola / log), Newton/Halley, et fallback bisection.
-    """
-    # normalisation pour elliptique
-    if e < 1.0:
-        # ramène M dans [0, 2pi)
-        M0 = np.mod(M, 2 * np.pi)
-
-        # --- 1) initial guess : Mikkola (bonne approximation pour large plage d'e) ---
-        def mikkola(e, M):
-            # implémentation classique de Mikkola (approximative mais robuste)
-            alpha = (1.0 - e) / (4.0 * e + 0.5)
-            beta = 0.5 * M / (4.0 * e + 0.5)
-            with np.errstate(all="ignore"):
-                z = (beta + np.sign(beta) * np.sqrt(beta**2 + alpha**3)) ** (1 / 3)
-                s = z - alpha / z
-                E0 = M + e * (3 * s - 4 * s**3)
-            return E0
-
-        E = mikkola(e, M0)
-
-        # --- 2) Newton iterations (use Halley if desired) ---
-        for _ in range(max_iter):
-            f = E - e * np.sin(E) - M0
-            f1 = 1 - e * np.cos(E)
-            # Halley correction (optional, faster)
-            f2 = e * np.sin(E)
-            # Halley step:
-            denom = 2 * f1 * f1 - f * f2
-            if denom != 0:
-                dE = 2 * f * f1 / denom
-            else:
-                dE = -f / f1
-            E = E - dE
-            if abs(dE) < tol:
-                return E
-
-        # --- 3) fallback : bisection on [0,2pi] (f monotone increasing in E) ---
-        a, b = 0.0, 2 * np.pi
-        fa = a - e * np.sin(a) - M0
-        fb = b - e * np.sin(b) - M0
-        # étendre si nécessaire (rare)
-        for _ in range(200):
-            if fa * fb <= 0:
-                break
-            b += 2 * np.pi
-            fb = b - e * np.sin(b) - M0
-        # bisection
-        for _ in range(100):
-            m = 0.5 * (a + b)
-            fm = m - e * np.sin(m) - M0
-            if abs(fm) < 1e-12:
-                return m
-            if fa * fm <= 0:
-                b, fb = m, fm
-            else:
-                a, fa = m, fm
-        return 0.5 * (a + b)
-
-    elif np.isclose(e, 1.0):
-        # Parabolic: Barker approx (D = tan(nu/2))
-        # M ~ D + D^3/3  => on peut approximer D ≈ (3M/2)^(1/3) initial
-        D = (1.5 * M) ** (1 / 3) if M >= 0 else -((1.5 * (-M)) ** (1 / 3))
-        return D
-
-    else:
-        # Hyperbolic: solve e*sinh(H) - H = M
-        # good initial guess (Vallado-like)
-        if M == 0:
-            H = 0.0
-        else:
-            sign = 1 if M > 0 else -1
-            # initial guess using log approximation
-            H = np.log(2 * abs(M) / e + 1.8) * sign
-
-        # Newton on hyperbolic eqn
-        for _ in range(max_iter):
-            f = e * np.sinh(H) - H - M
-            f1 = e * np.cosh(H) - 1
-            dH = -f / f1
-            H = H + dH
-            if abs(dH) < tol:
-                return H
-
-        # fallback: bracket and bisection on [low, high]
-        # choose bounds that bracket the root
-        low = -10.0 if M < 0 else 0.0
-        high = 10.0 if M > 0 else 0.0
-        # expand until bracket found
-        for _ in range(100):
-            f_low = e * np.sinh(low) - low - M
-            f_high = e * np.sinh(high) - high - M
-            if f_low * f_high <= 0:
-                break
-            low *= 2
-            high *= 2
-        # bisection
-        for _ in range(200):
-            mid = 0.5 * (low + high)
-            fm = e * np.sinh(mid) - mid - M
-            if abs(fm) < 1e-12:
-                return mid
-            if (e * np.sinh(low) - low - M) * fm <= 0:
-                high = mid
-            else:
-                low = mid
-        return 0.5 * (low + high)
-
-
-def true_anomaly_from_anomaly(e, anomaly):
-    """
-    Compute the true anomaly ν from the eccentric anomaly (E) or hyperbolic anomaly (H),
-    automatically handling elliptical, parabolic (≈1), and hyperbolic cases.
-
-    Parameters
-    ----------
-    e : float
-        Eccentricity
-    anomaly : float
-        Eccentric anomaly (E) if e<1, Hyperbolic anomaly (H) if e>1, or Barker parameter D if e≈1
-
-    Returns
-    -------
-    nu : float
-        True anomaly in radians
-    """
-
-    if e < 1.0:
-        # Elliptical case
-        cos_nu = (np.cos(anomaly) - e) / (1 - e * np.cos(anomaly))
-        sin_nu = (np.sqrt(1 - e**2) * np.sin(anomaly)) / (1 - e * np.cos(anomaly))
-        nu = np.arctan2(sin_nu, cos_nu)
-        return nu
-
-    elif np.isclose(e, 1.0):
-        # Parabolic case (approximation)
-        D = anomaly
-        nu = 2 * np.arctan(D)
-        return nu
-
-    else:
-        # Hyperbolic case
-        cosh_H = np.cosh(anomaly)
-        sinh_H = np.sinh(anomaly)
-        cosh_term = (e - cosh_H) / (e * cosh_H - 1)
-        sinh_term = (np.sqrt(e**2 - 1) * sinh_H) / (e * cosh_H - 1)
-        nu = np.arctan2(sinh_term, cosh_term)
-        return nu
 
 
 # ---- FILTRE LAMBRET-VOILE ----
@@ -1075,11 +1107,8 @@ def load_flybys_from_csv(filename="flybys.csv"):
                 flybys.append(fb)
 
     except FileNotFoundError:
-        print(f"⚠️ Fichier '{filename}' introuvable.")
+        print(f" Fichier '{filename}' introuvable.")
     return flybys
-
-
-import numpy as np
 
 
 def u_from_alpha_beta(r, v, alpha, beta, eps=1e-12):
@@ -1197,12 +1226,6 @@ def alpha_beta_from_u(r, v, u, eps=1e-12):
         beta = np.arctan2(c / sin_alpha, b / sin_alpha)
 
     return alpha, beta
-
-
-
-
-
-
 
 
 def make_control_splines(par, N, tof, time_vector=None):
@@ -1503,6 +1526,7 @@ def build_sequence(
     bodies_to_parse,
     orbital_period_search = False,
     body_excluded=None,
+    only_conics = False,
 ):
     
     # Initial state 
@@ -1514,11 +1538,16 @@ def build_sequence(
     max_revs_lmbrt = 100
 
     shield_burned = flybys[-1]["shield_burned"]
+    count = 0 
     while True:
+        count = count+1
+        print("we are at run", count)
         print("T mission is :", t / 86400 / 365.25, " years")
         print("J estimated is :", J)
+
         tof = np.linspace(min_tof, np.min([max_tof, t_max - t]), tof_tries_nb)
-        score_over_time = np.inf
+        print(tof)
+        score_over_time = 0
         tof_best = np.nan
 
         # Planet data at begining of leg
@@ -1526,14 +1555,18 @@ def build_sequence(
         body_j_before = bodies[body_j_before_id]
         r_beg, vp_dep = body_j_before.eph(t / 86400)
         for i in range(len(tof)):
+            print( "TOF scanning step is", i, "over", range(len(tof)))
             
             # We only parse requested objects --> can be bodies (all) or only planets
             for body_id, body_j in bodies_to_parse.items():
                 if body_id != body_excluded and body_id != flybys[-1]["body_id"]:
+                    
 
                     # get r2 at t + tof --> planet at end of leg
                     r2_body_j, v = body_j.eph((t + tof[i]) / 86400)
-
+                    
+                    # In all Lambert solutions considered we loo for the min DV (considering min Altaira approach constraint)
+                    dv_min_found = np.inf 
                     for w in range(2):
                         if w == 0:
                             l = pk.lambert_problem(
@@ -1561,6 +1594,7 @@ def build_sequence(
                             # filter sol and compute score if valid
 
                             # verif de la contrainte de proximité ALTAIRA
+                            pre_burned_shield = False
                             rmin = min_radius_calc(r1, v1, r2_body_j, v2, tof[i])
                             rmin = np.array(rmin)
                             invalid = False
@@ -1568,7 +1602,7 @@ def build_sequence(
                                 invalid = True
                             elif rmin > 0.01 * AU and rmin < 0.05 * AU:
                                 if shield_burned == False:
-                                    shield_burned = True
+                                    pre_burned_shield = True
                                 else:
                                     invalid = True
 
@@ -1576,7 +1610,6 @@ def build_sequence(
                             if np.any(np.isnan(v1)):
                                 invalid = True
 
-                            invalid == False
                             if invalid == False:
 
                                 # Minimisation du dv à viser
@@ -1589,143 +1622,148 @@ def build_sequence(
                                     vin_fb_plf, v_init_lmbrt_plf, body_j_before
                                 )
 
-                                #ax.cla()  # clear the current axes
-                                #for i in range(len(planets)-1):
-                                #     planet_plot = planets[i+1]
-                                #     pk.orbit_plots.plot_planet(planet_plot, color='b', axes=ax)
 
-                                #pk.orbit_plots.plot_kepler(r0 = r1, v0 = vin_fb, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60)
-                                #print('Printing output traj from planet without flyby in tof')
-                                #pk.orbit_plots.plot_kepler(r0 = r1, v0 = v1, tof =tof[i] , mu =MU_ALTAIRA, axes = ax, N=60, color='g')
-                                #print('Printing required traj from planet to meet target')
-                                #print('Solution number:',k)
-                                #plt.show(block=False)
-                                #plt.pause(0.1)
+                                if dv_req < dv_min_found:
+                                    dv_min_found = dv_req 
+                                
+                    # If one solution is satisfying we mininimize DV with parameter tof --> f(tof) = DV
+                    dv_req = dv_min_found
+                    if dv_req < 200:
+                        #print('body excluded is', flybys[-1]["body_id"])
+                        #print('index is',i)
+                        #print('begin a minimize dv with tof', tof[i], 'and body id', body_id)
+                        #print(dv_req)
+                        #dv = minimize_lmbrt_dv(tof[i],t,
+                        #        r1,
+                        #        body_j,
+                        #        vin_fb,
+                        #        vp_dep,
+                        #        100,
+                        #        body_j_before)
+                        #print("ehhh macarena :", dv)
+                           
+                        res_dv = minimize(
+                            minimize_lmbrt_dv,
+                            tof[i],
+                            args=(
+                                t,
+                                r1,
+                                body_j,
+                                vin_fb,
+                                vp_dep,
+                                100,
+                                body_j_before,
+                            ),
+                            method="Nelder-Mead",
+                            
+                            options={
+                                "maxiter": 2000,
+                            },
+                        )
+                        #print("DV minimized is", res_dv.fun)
 
-                                if dv_req < 200:
-                                    tof_start = tof[i]
-                                    x_check = minimize_lmbrt_dv(
-                                        tof[i],
-                                        t,
-                                        r1,
-                                        body_j,
-                                        vin_fb,
-                                        vp_dep,
-                                        100,
-                                        body_j_before,
-                                    )
-                                    print("dv_in_must_match : ", x_check, dv_req)
+                        if res_dv.fun < dv_min_found and res_dv.x > 0:
+                            tof_af_minimize = res_dv.x[0]
+                            v1, v2, r2_body_j, dv_req = update_lmbrt_params(
+                                r1,
+                                tof_af_minimize,
+                                t,
+                                body_j,
+                                vin_fb,
+                                100,
+                                body_j_before,
+                                0,
+                                0,
+                            )
+                        else: 
+                            tof_af_minimize = tof[i]
+                    else:
+                        tof_af_minimize = tof[i]
+                         
+                    if dv_req < 20 and  dv_req > 1e-6 and not only_conics :
+                        [status, dv_left, vout] = sail_filter_fast(
+                            r1,
+                            r2_body_j,
+                            tof_af_minimize,
+                            vin_fb,
+                            v1,
+                            C,
+                            r0,
+                            A,
+                            m,
+                            MU_ALTAIRA,
+                            body_j_before,
+                            vp_dep,
+                        )
+                    elif dv_req <= 1e-6 :
+                        status = True
+                    else:
+                        status = False
 
-                                    res_dv = minimize(
-                                        minimize_lmbrt_dv,
-                                        tof_start,
-                                        args=(
-                                            t,
-                                            r1,
-                                            body_j,
-                                            vin_fb,
-                                            vp_dep,
-                                            100,
-                                            body_j_before,
-                                        ),
-                                        method="Nelder-Mead",
-                                        options={
-                                            "maxiter": 2000,
-                                            "xatol": 1e-4,
-                                            "fatol": 1e-6,
-                                        },
-                                    )
-                                    print("Minimisation du DV gives :", res_dv.fun)
-                                    if res_dv.fun < dv_req and res_dv.x > 0:
-                                        tof[i] = res_dv.x
-                                        v1, v2, r2_body_j, dv_req = update_lmbrt_params(
-                                            r1,
-                                            tof[i],
-                                            t,
-                                            body_j,
-                                            vin_fb,
-                                            100,
-                                            body_j_before,
-                                            0,
-                                            0,
-                                        )
+                    # écart de l'arc
+                    if dv_req <  1e-6:
+                        #print("We have a conic arc !")
+                        dv_left = [0, 0, 0]
+                        vout = v1
+                        status = True
+                        
+                        # We measure the anomaly flied around the arc, if superior to half a period its not acceptable 
+                        if orbital_period_search:
+                            el_orb_search = pk.ic2par(r1,v1,MU_ALTAIRA)
+                            
+                            # Mandatory direct shot
+                            if el_orb_search[1] > 1:
+                                status = False
+                                T = np.inf
+                            else:
+                                T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
+                                #if tof_af_minimize/T > 0.5:
+                                #    status = False
+                                #else:
+                                #    status = True
 
-                                if dv_req < 20:
-                                    [status, dv_left, vout] = sail_filter_fast(
-                                        r1,
-                                        r2_body_j,
-                                        tof[i],
-                                        vin_fb,
-                                        v1,
-                                        C,
-                                        r0,
-                                        A,
-                                        m,
-                                        MU_ALTAIRA,
-                                        body_j_before,
-                                        vp_dep,
-                                    )
-                                else:
-                                    status = False
+                    if status is True:
 
-                                # écart de l'arc
-                                if dv_req < 0.001:
-                                    print("l'arc est conique !")
-                                    dv_left = [0, 0, 0]
-                                    vout = v1
-                                    status = True
-                                    
-                                    # We measure the anomaly flied around the arc, if superior to half a period its not acceptable 
-                                    if orbital_period_search:
-                                        el_orb_search = pk.ic2par(r1,v1)
-                                        
-                                        # Mandatory direct shot
-                                        if el_orb_search[1] > 1:
-                                            status = True
-                                            
-                                        else:
-                                            
-                                            T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
-                                            
-                                            if tof[i]/T > 0.5:
-                                                status = False
-                                            else:
-                                                status = True
-  
-                                if status is True:
+                        # objective computation list (body, tof, J)
+                        new_flyby = {
+                            "body_id": body_id,
+                            "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
+                            "Vinf": np.linalg.norm(
+                                np.array(v2) - np.array(v)
+                            ),
+                            "is_science": True,
+                            "r2": r2_body_j,
+                            "v2": v2,
+                            "tof": tof_af_minimize,
+                            "dv_left": dv_left,
+                            "vout": vout,
+                            "v1": v1,
+                            "shield_burned": shield_burned,
+                        }
+                        # Ajout à la liste
+                        flybys.append(new_flyby)
 
-                                    # objective computation list (body, tof, J)
-                                    new_flyby = {
-                                        "body_id": body_id,
-                                        "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
-                                        "Vinf": np.linalg.norm(
-                                            np.array(v2) - np.array(v)
-                                        ),
-                                        "is_science": True,
-                                        "r2": r2_body_j,
-                                        "v2": v2,
-                                        "tof": tof[i],
-                                        "dv_left": dv_left,
-                                        "vout": vout,
-                                        "v1": v1,
-                                        "shield_burned": shield_burned,
-                                    }
-                                    # Ajout à la liste
-                                    flybys.append(new_flyby)
-
-                                    # Calcul du score
-                                    J = objective(flybys)
-                                    flybys.pop()
-                                    score_over_time_new = (
-                                        dv_req  # /tof[i] a garder ou non
-                                    )
-                                    if score_over_time_new < score_over_time:
-                                        score_over_time = score_over_time_new
-                                        tof_best = tof[i]
-                                        best_flyby = new_flyby
-                                        J_best = J
-                                        r2_body_j_best = r2_body_j
-                                        vinfb_best = v2
+                        # Calcul du score
+                        J = objective(flybys)
+                        flybys.pop()
+                        
+                        if not orbital_period_search:
+                            # Criteria is score / time of leg 
+                            score_over_time_new = (
+                            J / tof_af_minimize
+                            )
+                        else:
+                            # Criteria is min period
+                            score_over_time_new = (
+                            1/T 
+                            )
+                        if score_over_time_new > score_over_time:
+                            score_over_time = score_over_time_new
+                            tof_best = tof_af_minimize
+                            best_flyby = new_flyby
+                            J_best = J
+                            r2_body_j_best = r2_body_j
+                            vinfb_best = v2
 
         # Pick max J/tof (simplified choice for now)
         t = t + tof_best
@@ -1733,17 +1771,22 @@ def build_sequence(
         if not np.isnan(tof_best):
             r1 = r2_body_j_best
             vin_fb = vinfb_best
+            
+            # MAJ of shield state 
+            if pre_burned_shield == True:
+                shield_burned = True 
+            
             # Ajout à la liste
             flybys.append(best_flyby)
             # Calcul du score
             J = objective(flybys)
-            
-            
-            
-             
         else:
             break
-            
+         
+        # The orbital period aimed has been reached so we exit this sequence search 
+        # as the direct objectivehere is to reduce orbital period, not to maximize score
+        if orbital_period_search and T < max_tof:
+            break
         
     print("Planet sequence builded !")
     # saving flybys
@@ -1755,24 +1798,23 @@ def build_sequence(
 def minimize_lmbrt_dv(tof, t, r1, body_j, vin_fb, vp, max_revs_lmbrt, planet):
 
     r2, v = body_j.eph(float((t + tof) / 86400))
-
+    
+    dv_req_best = np.inf
     for w in range(2):
         if w == 0:
             l = pk.lambert_problem(
-                r1=r1, r2=r2, tof=float(tof), mu=MU_ALTAIRA, cw=True, max_revs=100
+                r1=r1, r2=r2, tof=float(tof), mu=MU_ALTAIRA, cw=True, max_revs=max_revs_lmbrt
             )
         else:
             l = pk.lambert_problem(
-                r1=r1, r2=r2, tof=float(tof), mu=MU_ALTAIRA, cw=False, max_revs=100
+                r1=r1, r2=r2, tof=float(tof), mu=MU_ALTAIRA, cw=False, max_revs=max_revs_lmbrt
             )
 
-        dv_req_best = np.inf
         for k in range(len(l.get_v1())):
             v1 = l.get_v1()[k]
-            v_init_lmbrt = v1
             # 0) Conversion to planet frame
             vin_fb_plf = np.array(vin_fb) - np.array(vp)
-            v_init_lmbrt_plf = np.array(v_init_lmbrt) - np.array(vp)
+            v_init_lmbrt_plf = np.array(v1) - np.array(vp)
             # 1) delta-v requis
             dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet)
             if dv_req < dv_req_best:
@@ -1873,21 +1915,21 @@ def get_min_dv(
         ##      invalid = True
         ##
 
-        invalid = False
-        if invalid == False:
-            # Minimisation du dv à viser
-            # 0) Conversion to planet frame
+        ##invalid = False
+        ##if invalid == False:
+        # Minimisation du dv à viser
+        # 0) Conversion to planet frame
 
-            vin_fb_plf = np.array(vin_fb) - np.array(vp_dep)
-            v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
+        vin_fb_plf = np.array(vin_fb) - np.array(vp_dep)
+        v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
 
-            # 1) delta-v requis
+        # 1) delta-v requis
 
-            dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
-            # eq,ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, planet_init)
+        dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
+        # eq,ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, planet_init)
 
-            if dv_req < dv_min_req:
-                dv_min_req = dv_req
+        if dv_req < dv_min_req:
+            dv_min_req = dv_req
 
     return dv_min_req
 
@@ -1906,12 +1948,16 @@ def minimize_not_blocked(
     L,
     t,
     pos_list,
+    best_vin,
+    best_t,
+    preopt=False,
+    par0=None,
 ):
     res_f = False
     bounds = [
         (None, None),  # pos_x / AU  → libre
         (None, None),  # pos_y / AU  → libre
-        (None, None),  # V0 --> libre
+        (5000, 50000),  # V0 Bounded
         (1.745329, 2.268928),  # L
         (1.0 / 1e8, 86400 * 365.25 * 10 / 1e8),  # tof
     ]
@@ -1930,6 +1976,10 @@ def minimize_not_blocked(
             L,
             t,
             pos_list,
+            best_vin,
+            best_t,
+            preopt,
+            par0,
         ),
         method="Nelder-mead",
         bounds=bounds,
@@ -1952,6 +2002,12 @@ def leg_cost(
     L,
     pos_list,
 ):
+    
+    # Planet lists is randomized 
+    items = list(planets.items())
+    random.shuffle(items)
+
+
     MU = MU_ALTAIRA
     tofbest = np.inf
     best_res = np.inf
@@ -1959,11 +2015,11 @@ def leg_cost(
     tol = 0.1
     res_f_best = np.inf
     for n_period in range(200):
-        for body_id, body_j in planets.items():
+        for body_id, body_j in items:
             if body_id != body_aimed:
                 best_res = np.inf
 
-                # minimize pb parameters are [tof, V0 (s/c velocity at mission beginnin), L (orbital posiiton of planet Vulcan at encounter]
+                # minimize pb parameters are [tof, V0 (s/c velocity at mission beginning), L (orbital posiiton of planet Vulcan at encounter]
                 bounds = [
                     (1.0, 86400 * 365.25 * 10),
                     (5000, 50000),
@@ -2030,7 +2086,8 @@ def leg_cost(
                         L_best,
                         tofbest / 1e8,
                     ]
-
+                    preopt = True
+                    par0 = par
                     res_f = run_with_timeout(
                         minimize_not_blocked,
                         (
@@ -2047,124 +2104,157 @@ def leg_cost(
                             L,
                             t,
                             pos_list,
+                            best_vin,
+                            best_t,
+                            preopt,
+                            par0,
                         ),
                         timeout=60,
                     )
+                    if res_f != False and res_f != None:            
+                        print("preoptim cost")
+                        print(res_f.fun)
+                        par[4] = res_f.x[4]
+                        
+                        res_f = run_with_timeout(
+                            minimize_not_blocked,
+                            (
+                                distance_vector_and_leg_cost,
+                                par,
+                                period,
+                                n_period,
+                                planet_init,
+                                body_j,
+                                MU_ALTAIRA,
+                                shield_burned,
+                                V0,
+                                VFMIN,
+                                L,
+                                t,
+                                pos_list,
+                                best_vin,
+                                best_t,
+                                
+                                
+                            ),
+                            timeout=60,
+                        )
+                        print("end_optim cost")
+                        
+                        if res_f != False and res_f != None:  
+                            print(res_f.fun)
 
-                    if res_f != False and res_f != None:
-                        if res_f.fun < res_f_best:
-                            res_f_best = res_f.fun
-                            print("new minimum")
-                            print(res_f_best)
-                            if res_f_best < 1:
+                            if res_f.fun < res_f_best:
+                                res_f_best = res_f.fun
+                                print("new minimum")
+                                print(res_f_best)
+                                if res_f_best < 1:
 
-                                print("On converge !")
-                                print(res_f.x)
-                                print(body_id)
-                                print(n_period)
-                                # Point initial
-                                r_init = [
-                                    -200 * AU,
-                                    res_f.x[0] * AU,
-                                    res_f.x[1] * AU,
-                                ]
-                                v_init = [res_f.x[2], 0, 0]
+                                    print("On converge !")
+                                    print(res_f.x)
+                                    print(body_id)
+                                    print(n_period)
+                                    # Point initial
+                                    r_init = [
+                                        -200 * AU,
+                                        res_f.x[0] * AU,
+                                        res_f.x[1] * AU,
+                                    ]
+                                    v_init = [res_f.x[2], 0, 0]
 
-                                # Etat de la planète à la rencontre
-                                r0, v0 = planet_init.eph(0)
-                                Elp = np.array(pk.ic2eq(r0, v0, MU))
-                                el0 = np.array(pk.ic2par(r0, v0, MU))
-                                Elp[5] = res_f.x[3]
-                                rp, vp = pk.eq2ic(eq=list(Elp), mu=MU)
+                                    # Etat de la planète à la rencontre
+                                    r0, v0 = planet_init.eph(0)
+                                    Elp = np.array(pk.ic2eq(r0, v0, MU))
+                                    el0 = np.array(pk.ic2par(r0, v0, MU))
+                                    Elp[5] = res_f.x[3]
+                                    rp, vp = pk.eq2ic(eq=list(Elp), mu=MU)
 
-                                # temps au premier passage
-                                tp_first_pass = time_of_flight(r0, v0, rp, vp, MU)
+                                    # temps au premier passage
+                                    tp_first_pass = time_of_flight(r0, v0, rp, vp, MU)
 
-                                # écart obtenu
-                                t_best, d_best = minimize_distance_bisection(
-                                    r_init,
-                                    v_init,
-                                    rp,
-                                    vp,
-                                    MU_ALTAIRA,
-                                    T=365.25 * 200 * 86400,  # search window
-                                )
+                                    # écart obtenu
+                                    t_best, d_best = minimize_distance_bisection(
+                                        r_init,
+                                        v_init,
+                                        rp,
+                                        MU_ALTAIRA,
+                                        T=365.25 * 200 * 86400,  # search window
+                                    )
 
-                                # Etat du sc à la rencontre
-                                rf, vf = pk.propagate_lagrangian(
-                                    r_init, v_init, t_best, MU_ALTAIRA
-                                )
-                                print("écart mesuré avec la planète après optim")
-                                print(np.array(rf) - np.array(rp))
+                                    # Etat du sc à la rencontre
+                                    rf, vf = pk.propagate_lagrangian(
+                                        r_init, v_init, t_best, MU_ALTAIRA
+                                    )
+                                    print("écart mesuré avec la planète après optim")
+                                    print(np.array(rf) - np.array(rp))
 
-                                # Temps réel à la rencontre
-                                while tp_first_pass < t_best:
-                                    tp_first_pass = tp_first_pass + period
+                                    # Temps réel à la rencontre
+                                    while tp_first_pass < t_best:
+                                        tp_first_pass = tp_first_pass + period
 
-                                # On ajoute le n periode supplémentaire du aux choix de l'optim d'attendre
-                                t = tp_first_pass + period * n_period
+                                    # On ajoute le n periode supplémentaire du aux choix de l'optim d'attendre
+                                    t = tp_first_pass + period * n_period
 
-                                # valeurs pour le premier élément du dico flybys
-                                r1_fb1 = rf
-                                v1_fb1 = vf
-                                tof_fb1 = t_best
-                                # valeurs pour le second elem du dico flyby
+                                    # valeurs pour le premier élément du dico flybys
+                                    r1_fb1 = rf
+                                    v1_fb1 = vf
+                                    tof_fb1 = t_best
+                                    # valeurs pour le second elem du dico flyby
 
-                                body_id_fb2 = body_id_best
-                                r2_body_j, v = body_j_best.eph(
-                                    (t + res_f.x[4] * 1e8) / 86400
-                                )
+                                    body_id_fb2 = body_id_best
+                                    r2_body_j, v = body_j_best.eph(
+                                        (t + res_f.x[4] * 1e8) / 86400
+                                    )
 
-                                v1, v2, r2, dv_req_best = update_lmbrt_params(
-                                    r1_fb1,
-                                    res_f.x[4] * 1e8,
-                                    tp_first_pass,
-                                    body_j_best,
-                                    v1_fb1,
-                                    100,
-                                    planet_init,
-                                    period,
-                                    n_period,
-                                )
+                                    v1, v2, r2, dv_req_best = update_lmbrt_params(
+                                        r1_fb1,
+                                        res_f.x[4] * 1e8,
+                                        tp_first_pass,
+                                        body_j_best,
+                                        v1_fb1,
+                                        100,
+                                        planet_init,
+                                        period,
+                                        n_period,
+                                    )
 
-                                # As v1 can integrate a small velocity error along the arc the position error at arrival might blow, its better to obtain exact v1
+                                    # As v1 can integrate a small velocity error along the arc the position error at arrival might blow, its better to obtain exact v1
+                                    print("dv_req after calc :", dv_req_best)
+                                    print("compared to minimizer outputs :", res_f.fun)
 
-                                print("dv_req after calc :", dv_req_best)
-                                print("compared to minimizer outputs :", res_f.fun)
+                                    rtest, vtest = body_j_best.eph(
+                                        (res_f.x[4] * 1e8 + t) / 86400
+                                    )
+                                    print("valeur testé :", rtest)
+                                    print("at time, :", res_f.x[4] * 1e8 + t)
+                                    print("r outputed:", r2)
 
-                                rtest, vtest = body_j_best.eph(
-                                    (res_f.x[4] * 1e8 + t) / 86400
-                                )
-                                print("valeur testé :", rtest)
-                                print("at time, :", res_f.x[4] * 1e8 + t)
-                                print("r outputed:", r2)
+                                    # save data
+                                    data = {
+                                        "r_init": r_init,
+                                        "v_init": v_init,
+                                        "tp_first_pass": tp_first_pass,
+                                        "t": t,
+                                        "t_best": t_best,
+                                    }
+                                    np.save(
+                                        "save_state.npy", data
+                                    )  # écrase le fichier à chaque fois
 
-                                # save data
-                                data = {
-                                    "r_init": r_init,
-                                    "v_init": v_init,
-                                    "tp_first_pass": tp_first_pass,
-                                    "t": t,
-                                    "t_best": t_best,
-                                }
-                                np.save(
-                                    "save_state.npy", data
-                                )  # écrase le fichier à chaque fois
-
-                                return (
-                                    t,
-                                    r_init,
-                                    v_init,
-                                    r1_fb1,
-                                    v1_fb1,
-                                    tof_fb1,
-                                    body_id_fb2,
-                                    r2_body_j,
-                                    v1,
-                                    v2,
-                                    r2,
-                                    res_f.x[4] * 1e8,
-                                )
+                                    return (
+                                        t,
+                                        r_init,
+                                        v_init,
+                                        r1_fb1,
+                                        v1_fb1,
+                                        tof_fb1,
+                                        body_id_fb2,
+                                        r2_body_j,
+                                        v1,
+                                        v2,
+                                        r2,
+                                        res_f.x[4] * 1e8,
+                                    )
 
     return (
         t,
@@ -2195,18 +2285,26 @@ def distance_vector_and_leg_cost(
     Llist,
     t_list,
     pos_list,
+    best_vin,
+    best_t,
+    preopt,
+    par0,
 ):
+    
+    if preopt == True:
+        rf = np.array([-200 * AU, par0[0] * AU, par0[1] * AU], dtype=float)
+        vf = np.array([par0[2], 0, 0], dtype=float)
+        L = par0[3]
+    else:
+        # Initial state of object 1
+        rf = np.array([-200 * AU, par[0] * AU, par[1] * AU], dtype=float)
+        vf = np.array([par[2], 0, 0], dtype=float)
 
-    # Initial state of object 1
-    rf = np.array([-200 * AU, par[0] * AU, par[1] * AU], dtype=float)
-    vf = np.array([par[2], 0, 0], dtype=float)
-
-    L = par[3]
+        L = par[3]
 
     tof = par[4] * 1e8
     r0, v0 = planet_init.eph(0)
     Elp = np.array(pk.ic2eq(r0, v0, MU))
-    el0 = np.array(pk.ic2par(r0, v0, MU))
     Elp[5] = L
     rf2, vf2 = pk.eq2ic(eq=list(Elp), mu=MU)
 
@@ -2215,24 +2313,43 @@ def distance_vector_and_leg_cost(
     vf2 = np.array(vf2, dtype=float)
 
     t_best, d_best = minimize_distance_bisection(
-        rf, vf, rf2, vf2, MU, T=365.25 * 200 * 86400  # search window
+        rf, vf, rf2, MU, T=365.25 * 200 * 86400  # search window
     )
     
 
     tp_first_pass = time_of_flight(r0, v0, rf2, vf2, MU)
+    
+    
 
     while tp_first_pass < t_best:
         tp_first_pass = tp_first_pass + period
 
     # On ajoute le n periode supplémentaire du aux choix de l'optim d'attendre
     t = tp_first_pass + period * n_period
+    #t2 = best_t + period * n_period
+    
+    
+
+
+    #print("t_values :", t,t2)
 
     rin, vin_fb = pk.propagate_lagrangian(rf, vf, t_best, MU)
 
-
+    
+    #print("delta_v_in:",vin_fb,best_vin)
     dv_req = get_min_dv_real(
         tof, t, MU, 100, shield_burned, vin_fb, planet_init, body_j
     )
+    #dv_req2 = get_min_dv_real(
+    #    tof, t2, MU, 100, shield_burned, best_vin, planet_init, body_j
+    #)
+    #dv_req3 = get_min_dv_real(
+    #    tof, t2, MU, 100, shield_burned, vin_fb, planet_init, body_j
+    #)
+
+   # print("dv_req_delta",dv_req,dv_req2,dv_req3)
+
+    #Time.sleep(1000)
 
 
     return d_best / 100 + dv_req * 10000  #
@@ -2285,21 +2402,21 @@ def get_min_dv_real(
             ##      invalid = True
             ##
 
-            invalid = False
-            if invalid == False:
-                # Minimisation du dv à viser
-                # 0) Conversion to planet frame
+            ##invalid = False
+            ## if invalid == False:
+            # Minimisation du dv à viser
+            # 0) Conversion to planet frame
 
-                vin_fb_plf = np.array(vin_fb) - np.array(vp_dep)
-                v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
+            vin_fb_plf = np.array(vin_fb) - np.array(vp_dep)
+            v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
 
-                # 1) delta-v requis
+            # 1) delta-v requis
 
-                dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
-                # eq,ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, planet_init)
+            dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
+            # eq,ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, planet_init)
 
-                if dv_req < dv_min_req:
-                    dv_min_req = dv_req
+            if dv_req < dv_min_req:
+                dv_min_req = dv_req
 
     return dv_min_req
 
@@ -2361,8 +2478,6 @@ def get_vin_fb_t(par, V0, VFMIN, L, t_list, pos_list, planet_init, MU, period):
     return vin_fb, tp_first_pass, pos
 
 
-import numpy as np
-
 
 def time_of_flight(r0, v0, rf, vf, mu):
     # vecteur spécifique
@@ -2406,7 +2521,6 @@ def time_of_flight(r0, v0, rf, vf, mu):
     return tof
 
 
-import threading
 
 
 def run_with_timeout(func, args=(), timeout=5):
@@ -2462,3 +2576,203 @@ def angle_between(a, b):
     # éviter les erreurs numériques (ex: cos > 1 à cause de roundoff)
     cos_theta = np.clip(cos_theta, -1.0, 1.0)
     return np.arccos(cos_theta)  # en radians
+    
+
+def shield_state(shield_burned, r1, v1, r2, v2, tof):
+    # verif de la contrainte de proximité ALTAIRA
+    pre_burned_shield = False
+    rmin = min_radius_calc(r1, v1, r2, v2, tof)
+    rmin = np.array(rmin)
+    invalid = False
+    if rmin < 0.01 * AU:
+        invalid = True
+    elif rmin > 0.01 * AU and rmin < 0.05 * AU:
+        if shield_burned == False:
+            shield_burned = True
+        else:
+            invalid = True
+    return invalid, shield_burned
+
+
+
+
+# Anomalies conversions   
+def mean_anomaly_from_ecc(e, anomaly):
+    """
+    Returns the mean anomaly M (elliptic, parabolic, or hyperbolic)
+    from the given eccentricity e and anomaly (E or H).
+
+    Parameters
+    ----------
+    e : float
+        Eccentricity
+    anomaly : float
+        Eccentric (for e<1) or hyperbolic anomaly (for e>1)
+
+    Returns
+    -------
+    M : float
+        Mean anomaly
+    """
+    if e < 1.0:
+        return anomaly - e * np.sin(anomaly)
+    elif np.isclose(e, 1.0):
+        # Parabolic case: Barker's equation (approx.)
+        D = np.tan(anomaly / 2)
+        return D + D**3 / 3.0
+    else:  # e > 1
+        return e * np.sinh(anomaly) - anomaly
+
+
+
+def kepler_anomaly_from_mean(e, M, tol=1e-12, max_iter=60):
+    """
+    Retourne l'anomalie (E pour e<1, H pour e>1, D pour e≈1)
+    à partir du mean anomaly M.
+    Utilise : initial guess (Mikkola / log), Newton/Halley, et fallback bisection.
+    """
+    # normalisation pour elliptique
+    if e < 1.0:
+        # ramène M dans [0, 2pi)
+        M0 = np.mod(M, 2 * np.pi)
+
+        # --- 1) initial guess : Mikkola (bonne approximation pour large plage d'e) ---
+        def mikkola(e, M):
+            # implémentation classique de Mikkola (approximative mais robuste)
+            alpha = (1.0 - e) / (4.0 * e + 0.5)
+            beta = 0.5 * M / (4.0 * e + 0.5)
+            with np.errstate(all="ignore"):
+                z = (beta + np.sign(beta) * np.sqrt(beta**2 + alpha**3)) ** (1 / 3)
+                s = z - alpha / z
+                E0 = M + e * (3 * s - 4 * s**3)
+            return E0
+
+        E = mikkola(e, M0)
+
+        # --- 2) Newton iterations (use Halley if desired) ---
+        for _ in range(max_iter):
+            f = E - e * np.sin(E) - M0
+            f1 = 1 - e * np.cos(E)
+            # Halley correction (optional, faster)
+            f2 = e * np.sin(E)
+            # Halley step:
+            denom = 2 * f1 * f1 - f * f2
+            if denom != 0:
+                dE = 2 * f * f1 / denom
+            else:
+                dE = -f / f1
+            E = E - dE
+            if abs(dE) < tol:
+                return E
+
+        # --- 3) fallback : bisection on [0,2pi] (f monotone increasing in E) ---
+        a, b = 0.0, 2 * np.pi
+        fa = a - e * np.sin(a) - M0
+        fb = b - e * np.sin(b) - M0
+        # étendre si nécessaire (rare)
+        for _ in range(200):
+            if fa * fb <= 0:
+                break
+            b += 2 * np.pi
+            fb = b - e * np.sin(b) - M0
+        # bisection
+        for _ in range(100):
+            m = 0.5 * (a + b)
+            fm = m - e * np.sin(m) - M0
+            if abs(fm) < 1e-12:
+                return m
+            if fa * fm <= 0:
+                b, fb = m, fm
+            else:
+                a, fa = m, fm
+        return 0.5 * (a + b)
+
+    elif np.isclose(e, 1.0):
+        # Parabolic: Barker approx (D = tan(nu/2))
+        # M ~ D + D^3/3  => on peut approximer D ≈ (3M/2)^(1/3) initial
+        D = (1.5 * M) ** (1 / 3) if M >= 0 else -((1.5 * (-M)) ** (1 / 3))
+        return D
+
+    else:
+        # Hyperbolic: solve e*sinh(H) - H = M
+        # good initial guess (Vallado-like)
+        if M == 0:
+            H = 0.0
+        else:
+            sign = 1 if M > 0 else -1
+            # initial guess using log approximation
+            H = np.log(2 * abs(M) / e + 1.8) * sign
+
+        # Newton on hyperbolic eqn
+        for _ in range(max_iter):
+            f = e * np.sinh(H) - H - M
+            f1 = e * np.cosh(H) - 1
+            dH = -f / f1
+            H = H + dH
+            if abs(dH) < tol:
+                return H
+
+        # fallback: bracket and bisection on [low, high]
+        # choose bounds that bracket the root
+        low = -10.0 if M < 0 else 0.0
+        high = 10.0 if M > 0 else 0.0
+        # expand until bracket found
+        for _ in range(100):
+            f_low = e * np.sinh(low) - low - M
+            f_high = e * np.sinh(high) - high - M
+            if f_low * f_high <= 0:
+                break
+            low *= 2
+            high *= 2
+        # bisection
+        for _ in range(200):
+            mid = 0.5 * (low + high)
+            fm = e * np.sinh(mid) - mid - M
+            if abs(fm) < 1e-12:
+                return mid
+            if (e * np.sinh(low) - low - M) * fm <= 0:
+                high = mid
+            else:
+                low = mid
+        return 0.5 * (low + high)
+
+
+def true_anomaly_from_anomaly(e, anomaly):
+    """
+    Compute the true anomaly ν from the eccentric anomaly (E) or hyperbolic anomaly (H),
+    automatically handling elliptical, parabolic (≈1), and hyperbolic cases.
+
+    Parameters
+    ----------
+    e : float
+        Eccentricity
+    anomaly : float
+        Eccentric anomaly (E) if e<1, Hyperbolic anomaly (H) if e>1, or Barker parameter D if e≈1
+
+    Returns
+    -------
+    nu : float
+        True anomaly in radians
+    """
+
+    if e < 1.0:
+        # Elliptical case
+        cos_nu = (np.cos(anomaly) - e) / (1 - e * np.cos(anomaly))
+        sin_nu = (np.sqrt(1 - e**2) * np.sin(anomaly)) / (1 - e * np.cos(anomaly))
+        nu = np.arctan2(sin_nu, cos_nu)
+        return nu
+
+    elif np.isclose(e, 1.0):
+        # Parabolic case (approximation)
+        D = anomaly
+        nu = 2 * np.arctan(D)
+        return nu
+
+    else:
+        # Hyperbolic case
+        cosh_H = np.cosh(anomaly)
+        sinh_H = np.sinh(anomaly)
+        cosh_term = (e - cosh_H) / (e * cosh_H - 1)
+        sinh_term = (np.sqrt(e**2 - 1) * sinh_H) / (e * cosh_H - 1)
+        nu = np.arctan2(sinh_term, cosh_term)
+        return nu    

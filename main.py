@@ -11,6 +11,7 @@ import os
 import pickle
 import json
 import random
+import time 
 
 print("Welcome to GTOC13 optimization program")
 
@@ -19,22 +20,27 @@ print("Welcome to GTOC13 optimization program")
 
 # Hyperparams
 tof_tries_nb = (
-    2000  # Size of the times_of_flight vector to parse in the sequence finding
+    100  # Size of the times_of_flight vector to parse in the sequence finding
 )
-min_tof = 20000 * 86400  # Minimum tof between two planets [s]
-max_tof = 100000 * 86400  # Maximum tof between two planets [s]
-max_revs_lmbrt = 10  # In the Lambert solving algorithm there is 2N+1 solutions with N being the number of revolutions
+min_tof = 10 * 86400  # Minimum tof between two planets [s]
+max_tof = 50 * 86400 * 365.25  # Maximum tof between two planets [s]
+max_revs_lmbrt = 100  # In the Lambert solving algorithm there is 2N+1 solutions with N being the number of revolutions
+
+max_period_aimed = 10 * 365.25 * 86400 # In first_legs_search this is the orbital period to aim for  
 
 V0_min = 3000  # This is the initial Min and Max Velocities in [m/s]
 V0_max = 50000
 
 # What to execute
 initial_point_search = False  # Not to be runned each time, this builds a table of velocity/position and times vectors at first body encounter as a function of the initial state of the problem
-first_two_legs_search = True # Wether to compute or reuse the choice of the two firsts conic legs
+first_legs_search = True # Wether to compute or reuse the choice of the two firsts conic legs
 sequence_search = True  # Wether to run the flybys sequence search or not
-solve_solar_sail_arcs = True  # Wether to run the solving of the sail arcs
+only_conics = True # If running a sequence search and orbital reduction legs choose to consider only conic arcs or not (use the sail or not)
+solve_solar_sail_arcs = False  # Wether to run the solving of the sail arcs
 only_refine = False  # Wether to only run the refinement of the solar sail solving of controlled arcs (the solving process is divided in two steps)
 Write_GTOC_output_file = True  # Wether to prepare the GTOC format solution file or not
+Draw_mission = True # at the end of the run draw the trajectory on a 3D plot
+
 
 # Will re-run sequence search if no convergence and will restart all process forever with randomness to try improving the solution
 Perpetual_run = True
@@ -127,6 +133,7 @@ while True:
                 )
 
         print("Looking for an initial point..")
+        print("For now this part of the script has no end and will parse all V0 then offset lambda 0 by 10° modulo 2 * pi then iterate again forever, it should be stopped by the user when 'init_pos.csv' is considered big enough ")
         while True:
 
             # Get body position at lambda
@@ -149,7 +156,7 @@ while True:
                 res = minimize(
                     distance_vector,
                     par_start,
-                    args=(V_space[i], rp, vp, MU_ALTAIRA),
+                    args=(V_space[i], rp, MU_ALTAIRA),
                     method="Nelder-Mead",
                     options={
                         "disp": False,
@@ -198,12 +205,8 @@ while True:
                         r0=rf, v0=vf, tof=tof_init, mu=MU_ALTAIRA
                     )
 
-                    # Check ALTAIRA proximity constraint
-                    rmin = min_radius_calc(rf, vf, rf_min, vf_min, tof_init)
-                    rmin = np.array(rmin)
-
-                    if rmin < 0.01 * AU:
-                        invalid = True
+                    # Check ALTAIRA proximity constraint (we do not store shield state data)
+                    invalid, shield_state_not_used = shield_state(False, rf, vf, rf_min, vf_min, tof_init)
 
                     rp0, vp0 = planet_init.eph(0)
                     rp, vp = pk.propagate_lagrangian(
@@ -220,39 +223,39 @@ while True:
                                 "crosscheck of initial point conv not validated"  # If raise an error it shows a pb in the script
                             )
 
-                    # store all data needed and write
-                    pos_0_opt = [-200 * AU, res.x[0], 0]
-                    v_0_opt = [V_space[i], 0, 0]
-                    t0_opt = t0
-                    tp_first_pass_opt = tp_first_pass
-                    rf_min_opt = rf_min
-                    vf_min_opt = vf_min
-                    cost = res.fun
-                    # Append one line per iteration
-                    with open(filename, mode="a", newline="") as f:
-                        writer = csv.writer(f)
-                        writer.writerow(
-                            [
-                                i,
-                                f"{t0_opt:.17e}",
-                                f"{tp_first_pass_opt:.17e}",
-                                f"{pos_0_opt[0]:.17e}",
-                                f"{pos_0_opt[1]:.17e}",
-                                f"{pos_0_opt[2]:.17e}",
-                                f"{v_0_opt[0]:.17e}",
-                                f"{v_0_opt[1]:.17e}",
-                                f"{v_0_opt[2]:.17e}",
-                                f"{rf_min_opt[0]:.17e}",
-                                f"{rf_min_opt[1]:.17e}",
-                                f"{rf_min_opt[2]:.17e}",
-                                f"{vf_min_opt[0]:.17e}",
-                                f"{vf_min_opt[1]:.17e}",
-                                f"{vf_min_opt[2]:.17e}",
-                                f"{body_aimed:.17e}",
-                                f"{cost:.17e}",
-                                f"{lambda0:17e}",
-                            ]
-                        )
+                        # store all data needed and write
+                        pos_0_opt = [-200 * AU, res.x[0], 0]
+                        v_0_opt = [V_space[i], 0, 0]
+                        t0_opt = t0
+                        tp_first_pass_opt = tp_first_pass
+                        rf_min_opt = rf_min
+                        vf_min_opt = vf_min
+                        cost = res.fun
+                        # Append one line per iteration
+                        with open(filename, mode="a", newline="") as f:
+                            writer = csv.writer(f)
+                            writer.writerow(
+                                [
+                                    i,
+                                    f"{t0_opt:.17e}",
+                                    f"{tp_first_pass_opt:.17e}",
+                                    f"{pos_0_opt[0]:.17e}",
+                                    f"{pos_0_opt[1]:.17e}",
+                                    f"{pos_0_opt[2]:.17e}",
+                                    f"{v_0_opt[0]:.17e}",
+                                    f"{v_0_opt[1]:.17e}",
+                                    f"{v_0_opt[2]:.17e}",
+                                    f"{rf_min_opt[0]:.17e}",
+                                    f"{rf_min_opt[1]:.17e}",
+                                    f"{rf_min_opt[2]:.17e}",
+                                    f"{vf_min_opt[0]:.17e}",
+                                    f"{vf_min_opt[1]:.17e}",
+                                    f"{vf_min_opt[2]:.17e}",
+                                    f"{body_aimed:.17e}",
+                                    f"{cost:.17e}",
+                                    f"{lambda0:17e}",
+                                ]
+                            )
             # Perturbate lambda0 by a small amount 
             lambda0 = (lambda0 + np.pi / 180 * 10) % (2 * np.pi)
         print("saving results to file 'init_pos.csv'")
@@ -260,7 +263,7 @@ while True:
     # Now that we either runned initial point table build or not we start here by defining the two first flybys             
     if sequence_search == True:
         
-        if first_two_legs_search == True:
+        if first_legs_search == True:
             print("Begining orbital period reduction legs..")
             # Reading the previously builded file
             shield_burned, V0_list, VFMIN_list, L_list, tp_list, pos_list = read_init_pos(
@@ -277,6 +280,7 @@ while True:
             planet_init = planets[body_aimed]
             
             while True:
+                flybys = []
                 t, r_init, v_init, r1_fb1, v1_fb1, tof_fb1, body_id_fb2, r2_body_j, v1, v2, r2, tof2 = leg_cost(
                     planets,
                     tp,
@@ -293,107 +297,132 @@ while True:
                 
                 # two first legs are now obtained, prepare to compute the rest of the sequence 
                 shield_burned = False
-                # Proimity constraint calculation
-                tof_for_min_radius = time_of_flight(r_init, v_init, r1_fb1, v1_fb1, MU_ALTAIRA)
-                rmin = min_radius_calc(r_init, v_init, r1_fb1, v1_fb1, tof_for_min_radius)
-                rmin = np.array(rmin)
-                if rmin < 0.01 * AU:
-                    print(rmin)
-                    raise Exception(
-                        "Rmin too small on first leg"
-                    )  # This is not supposed to happen and should be protected in leg_cost
-                elif rmin > 0.01 * AU and rmin < 0.05 * AU:
-                    shield_burned = True
-
-                if t < t_max:
-                    new_flyby = {
-                        "body_id": body_aimed,
-                        "r_hat": r1_fb1 / np.linalg.norm(r1_fb1),
-                        "Vinf": np.linalg.norm(v1_fb1),
-                        "is_science": True,
-                        "r2": r1_fb1,
-                        "v2": v1_fb1,
-                        "tof": tof_fb1,
-                        "dv_left": [0, 0, 0],
-                        "vout": [0, 0, 0],
-                        "v1": [0, 0, 0],
-                        "shield_burned": shield_burned,
-                    }
-
-                    # Add to the flybies list
-                    flybys.append(new_flyby)
-                    # Score computation
-                    J = objective(flybys)
+                # Proximity constraint calculation for first leg 
+                invalid, shield_burned = shield_state(shield_burned, r_init, v_init, r1_fb1, v1_fb1, tof_fb1)
+                
+                if not invalid :
+   
+                    #  OVERKILL ? WE HAVE tof_fb1
+                    #tof_for_min_radius = time_of_flight(r_init, v_init, r1_fb1, v1_fb1, MU_ALTAIRA)
+                    #rmin = min_radius_calc(r_init, v_init, r1_fb1, v1_fb1, tof_fb1)
+                    #rmin = np.array(rmin)
+                    #if rmin < 0.01 * AU:
+                    #    print(rmin)
+                    #    raise Exception(
+                    #        "Rmin too small on first leg"
+                    #    )  # This is not supposed to happen and should be protected in leg_cost
+                    #elif rmin > 0.01 * AU and rmin < 0.05 * AU:
+                    #    shield_burned = True
+                    #                         print(rmin)
+                    #    raise Exception(
+                    #        "Rmin too small on first leg"
+                    #    )  # This is not supposed to happen and should be protected in leg_cost
 
                     if t < t_max:
-                        # Second flyby
                         new_flyby = {
-                            "body_id": body_id_fb2,
-                            "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
-                            "Vinf": np.linalg.norm(v2),
+                            "body_id": body_aimed,
+                            "r_hat": r1_fb1 / np.linalg.norm(r1_fb1),
+                            "Vinf": np.linalg.norm(v1_fb1),
                             "is_science": True,
-                            "r2": r2,
-                            "v2": v2,
-                            "tof": tof2,
+                            "r2": r1_fb1,
+                            "v2": v1_fb1,
+                            "tof": tof_fb1,
                             "dv_left": [0, 0, 0],
-                            "vout": v1,
-                            "v1": v1,
+                            "vout": [0, 0, 0],
+                            "v1": [0, 0, 0],
                             "shield_burned": shield_burned,
                         }
-                        t = t + tof2
-                        # Add to flyby list
-                        flybys.append(new_flyby)
-                        # Compute score
-                        J = objective(flybys)
-                        # saving flybys
-                        save_flybys_to_csv(flybys, filename="flyby_first_two_legs.csv")
-                        
-                        
-                        # Now goal is to evaluate orbital period to find a reasonable one, if not for now iterate 
-                        flybys = build_sequence(
-                            J,
-                            t,
-                            flybys,
-                            bodies,
-                            0,
-                            planets[10].compute_period(),
-                            100,
-                            t_max,
-                            max_revs_lmbrt,
-                            planets,
-                            orbital_period_search = True 
-                        )
-                        
-                        # At the last flyby 
-                        r_last = flybys[-1]["r2"]
-                        v_last = flybys[-1]["v2"]
-                        
-                        # Orbital period ? 
-                        el_orb_search = pk.ic2par(r1,v1)
-                        # Mandatory direct shot
-                        if el_orb_search[1] > 1:
-                            T = np.inf              
-                        else:         
-                            T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
-                        
-                        print("orbital period at end of scan n is", T)
-                        print("target is ", planets[10].compute_period())
-                        if T < planets[10].compute_period():
-                            break
-                            
-                        
 
+                        # Add to the flybies list
+                        flybys.append(new_flyby)
+                        # Score computation
+                        J = objective(flybys)
+                        
+                        
+                        # ALTAIRA proximity constraint 
+                        invalid, shield_burned = shield_state(shield_burned, r1_fb1, v1, r2, v2, tof2)
+
+                        
+                        # Second flyby
+                            
+                             
+                        # ALTAIRA proximity constraint 
+                        invalid, shield_burned = shield_state(shield_burned, r1_fb1, v1, r2, v2, tof2)
+                        
+                        if not invalid : 
+                    
+                            new_flyby = {
+                                "body_id": body_id_fb2,
+                                "r_hat": r2_body_j / np.linalg.norm(r2_body_j),
+                                "Vinf": np.linalg.norm(v2),
+                                "is_science": True,
+                                "r2": r2,
+                                "v2": v2,
+                                "tof": tof2,
+                                "dv_left": [0, 0, 0],
+                                "vout": v1,
+                                "v1": v1,
+                                "shield_burned": shield_burned,
+                            }
+                            t = t + tof2
+                            # Add to flyby list
+                            flybys.append(new_flyby)
+                            # Compute score
+                            J = objective(flybys)
+                            # saving flybys
+                            save_flybys_to_csv(flybys, filename="flyby_first_two_legs.csv")
+                            
+                            
+                            # Now goal is to evaluate orbital period to find a reasonable one, if not for now iterate 
+                            flybys = build_sequence(
+                                J,
+                                t,
+                                flybys,
+                                bodies,
+                                10, # MIN TOF
+                                max_period_aimed, # MAX TOF
+                                100,
+                                t_max,
+                                max_revs_lmbrt,
+                                planets,
+                                orbital_period_search = True,
+                                only_conics = only_conics
+                            )
+                            
+                            # At the last flyby 
+                            r_last = flybys[-1]["r2"]
+                            v_last = flybys[-1]["v2"]
+                            
+                            # Orbital period ? 
+                            el_orb_search = pk.ic2par(r_last,v_last, MU_ALTAIRA)
+                            # Mandatory direct shot
+                            if el_orb_search[1] > 1:
+                                T = np.inf              
+                            else:         
+                                T = 2*np.pi * np.sqrt(el_orb_search[0]**3/MU_ALTAIRA)
+                            
+                            print("orbital period at end of scan n is", T)
+                            print("orbital eccentricity is", el_orb_search[1])
+                            print("target is ", max_period_aimed)
+                            if T < max_period_aimed:
+                                break
+                            
+                            # Compute actual mission time
+                            t = 0 
+                            for n_fb in range(len(flybys)):                          
+                                t = t + flybys[i]["tof"]
+                                
                     else:
                         print("First segment is already > t_max : ", t / 86400 / 365.25)
                         break
-                
-                # Save t for next runs in addition to the flybys dict
-                with open("t.pkl", "wb") as f:
-                    pickle.dump(t, f)   
-                
-        else:
-            flybys = load_flybys_from_csv(filename="flyby_first_two_legs.csv")
-            J = objective(flybys)
+                    
+                    # Save t for next runs in addition to the flybys dict
+                    with open("t.pkl", "wb") as f:
+                        pickle.dump(t, f)   
+                    
+            else:
+                flybys = load_flybys_from_csv(filename="flyby_first_two_legs.csv")
+                J = objective(flybys)
 
 
                 
@@ -402,7 +431,8 @@ while True:
         with open("t.pkl", "rb") as f:
             t = pickle.load(f)
         
-                
+        
+        print("End orbital period reduction legs, beginning optimal sequence search")
         flybys = build_sequence(
             J,
             t,
@@ -414,6 +444,7 @@ while True:
             t_max,
             max_revs_lmbrt,
             bodies,
+            only_conics = only_conics
         )
         save_flybys_to_csv(flybys, filename="flybys_first_row.csv")
 
@@ -432,10 +463,10 @@ while True:
         # --- Suppression du fichier en début de run ---
         if os.path.exists(save_path):
             os.remove(save_path)
-            print(f"🗑️  Fichier {save_path} supprimé en début de run.")
+            print(f" Fichier {save_path} supprimé en début de run.")
         if os.path.exists(save_path_json):
             os.remove(save_path_json)
-            print(f"🗑️  Fichier {save_path} supprimé en début de run.")
+            print(f" Fichier {save_path} supprimé en début de run.")
 
         for depth_nb in range(sequence_search_depth):
             # Re-run sequence search excluding last sol
@@ -464,8 +495,7 @@ while True:
                     tof_tries_nb,
                     t_max,
                     max_revs_lmbrt,
-                    rin,
-                    vin,
+                    planets,
                     body_excluded=body_id_exclude,
                 )
 
@@ -546,7 +576,7 @@ while True:
                         # si only refine on récupère les résultats ici
                         if os.path.exists(save_path_pkl):
                             print(
-                                "🟢 Cached result found - skipping propagation error compensation."
+                                "Cached result found - skipping propagation error compensation."
                             )
                             with open(save_path_pkl, "rb") as f:
                                 all_results = pickle.load(f)
@@ -561,7 +591,7 @@ while True:
                                 os.remove(save_path_pkl)
                                 print("Cache results intermediate cleaned")
                             all_results = {}
-                            print("🆕 Nouveau cache créé.")
+                            print("Nouveau cache créé.")
 
                             if 0 == 2:
                                 continue
@@ -651,7 +681,7 @@ while True:
 
                                                 if cost < error_threshold:
                                                     print(
-                                                        f"✅ Success with {method} (cost={cost:.2f})"
+                                                        f" Success with {method} (cost={cost:.2f})"
                                                     )
                                                     par_start = res.x
                                                     success = True
@@ -663,12 +693,12 @@ while True:
                                             # Si toutes les méthodes échouent → réduction du pas spatial
                                             step_scale /= 2.0
                                             print(
-                                                f"⚠️ All methods failed. Reducing step scale to {step_scale:.3f} and retrying..."
+                                                f"All methods failed. Reducing step scale to {step_scale:.3f} and retrying..."
                                             )
 
                                         if not success:
                                             print(
-                                                "❌ No convergence even after step reduction. Continuing to next interpolation point."
+                                                "No convergence even after step reduction. Continuing to next interpolation point."
                                             )
                                             par_start = res.x
                                         print(
@@ -698,14 +728,14 @@ while True:
                             factor = np.linspace(1, 0, N_interp2)
 
                             # ============================================================
-                            # 🔧 Fonction récursive principale : solve_segment
+                            # Fonction récursive principale : solve_segment
                             # ============================================================
                             def solve_segment(
                                 v_start, v_end, par_guess, bounds, depth=0
                             ):
                                 """Résout un segment (v_start → v_end) de manière récursive avec multi-méthodes et réutilisation intelligente."""
                                 print(
-                                    f"\n➡ Solving subsegment depth={depth} "
+                                    f"\n Solving subsegment depth={depth} "
                                     f"({np.linalg.norm(v_start):.3f}) → ({np.linalg.norm(v_end):.3f})"
                                 )
 
@@ -748,7 +778,7 @@ while True:
                                             best_res = res_try
                                             current_guess = (
                                                 res_try.x.copy()
-                                            )  # 🔑 On met à jour le guess pour la méthode suivante
+                                            )  # On met à jour le guess pour la méthode suivante
                                             if best_cost < error_threshold:
                                                 return current_guess
 
@@ -759,14 +789,14 @@ while True:
                                 # --- Décision ---
                                 if best_res is not None and best_cost < error_threshold:
                                     print(
-                                        f"✅ Subsegment converged (cost={best_cost:.3e})"
+                                        f" Subsegment converged (cost={best_cost:.3e})"
                                     )
                                     return best_res.x.copy()
 
                                 # --- Si on atteint la profondeur max ---
                                 if depth >= max_subdivisions:
                                     print(
-                                        f"❌ Max subdivision reached at depth {depth}, keeping best result."
+                                        f" Max subdivision reached at depth {depth}, keeping best result."
                                     )
                                     return (
                                         best_res.x.copy()
@@ -776,7 +806,7 @@ while True:
 
                                 # --- Sinon, subdivision récursive avec propagation de la meilleure solution ---
                                 print(
-                                    f"⚠ Subsegment failed (cost={best_cost:.2f}), subdividing..."
+                                    f"Subsegment failed (cost={best_cost:.2f}), subdividing..."
                                 )
                                 mid_v = 0.5 * (v_start + v_end)
 
@@ -791,7 +821,7 @@ while True:
                                 return par_end.copy()
 
                             # ============================================================
-                            # 🔹 ONE SHOT GLOBAL (sans utilisation de "guess")
+                            #  ONE SHOT GLOBAL (sans utilisation de "guess")
                             # ============================================================
                             print("One shot try begins")
                             ##  print("One shot try begins (randomized)")
@@ -823,12 +853,12 @@ while True:
 
                             if cost < error_threshold:
                                 print(
-                                    "✅ Global one-shot succeeded — skipping interpolation phase."
+                                    "Global one-shot succeeded — skipping interpolation phase."
                                 )
                                 par_start = res_global.x.copy()
                             else:
                                 print(
-                                    "⚠️ Global one-shot failed — starting adaptive interpolation."
+                                    "Global one-shot failed — starting adaptive interpolation."
                                 )
                                 v_prev = vaf_fb + guess * factor[0]
 
@@ -854,17 +884,17 @@ while True:
                                     )
                                     v_prev = v_target
                                     print(
-                                        f"✅ Completed interpolation step {i+1}/{N_interp2}"
+                                        f"Completed interpolation step {i+1}/{N_interp2}"
                                     )
 
                                 par_start = par_global.copy()
 
                             # ============================================================
-                            # 💾 Sauvegarde finale
+                            # Sauvegarde finale
                             # ============================================================
-                            print("\n💾 Saving final optimized parameters...")
+                            print("\n Saving final optimized parameters...")
                             np.save("par_final.npy", par_start)
-                            print("✅ Saved as 'par_final.npy'")
+                            print("Saved as 'par_final.npy'")
                         else:
                             par_start = np.load("par_final.npy")
 
@@ -1003,7 +1033,7 @@ while True:
                                     best_res = res_try
                                     prev_x = res_try.x
                                     best_propag_factor = prop_fac
-                                    print(f"✅ Improved to cost {res_try.fun:.3e}")
+                                    print(f" Improved to cost {res_try.fun:.3e}")
                                     tOUT, rout2, vout2 = propagate_sub_control(
                                         rout,
                                         vout,
@@ -1021,7 +1051,7 @@ while True:
 
                                 if best_res.fun < target_error:
                                     print(
-                                        "🎯 Target precision reached — stopping refinement."
+                                        " Target precision reached — stopping refinement."
                                     )
                                     break
 
@@ -1090,7 +1120,7 @@ while True:
                     with open(save_path_json, "w") as f:
                         json.dump(results_json, f, indent=2)
 
-                    print(f"💾 Structured result saved to {save_path_json}")
+                    print(f" Structured result saved to {save_path_json}")
                     if n_fb == len(flybys) - 2:
                         print(
                             "all segments solved ! Next step is writing GTOC13 submission file"
@@ -1098,8 +1128,25 @@ while True:
                         break
 
     # Ecriture du fichier de sorties final
+    if Write_GTOC_output_file or Draw_mission:
+        
+        if Draw_mission:
+            
+            sc_handle = None
 
-    if Write_GTOC_output_file:
+            # lets check trajectory visually at each run 
+            planets = load_bodies_from_csv("gtoc13_planets.csv")
+
+            plt.ion()   # mode interactif
+            ax = None
+            for i in range(len(planets)-1):
+                 planet_plot = planets[i+1]
+                 ax = pk.orbit_plots.plot_planet(planet_plot, color='b', axes=ax)
+            ax.set_autoscale_on(False)
+
+            plt.show()
+            plt.pause(0.001)
+
         output_table = []
         # Spline size
         N = 10
@@ -1199,17 +1246,48 @@ while True:
 
                 rp0, vp0 = planet_init.eph(0)
                 rp1, vp1 = pk.propagate_lagrangian(r0=rp0, v0=vp0, tof=t, mu=MU_ALTAIRA)
+                
+                if Draw_mission:
+                    
+                    # --- sauver la vue courante ---
+                    xlim = ax.get_xlim3d()
+                    ylim = ax.get_ylim3d()
+                    zlim = ax.get_zlim3d()
+                    
+                    # Plot spacecraft
+                    pk.orbit_plots.plot_kepler(r, v, -tof, MU_ALTAIRA, axes = ax, N=6000, color='g')
+                    print("At flyby : ", i+1, "Score is :", objective(flybys[0:i+1]))
 
-                ##        import matplotlib.pyplot as plt
-                ##
-                ##        fig = plt.figure()
-                ##        ax = pk.orbit_plots.plot_planet(planet_init,tf=t, color='b')
-                ##        pk.orbit_plots.plot_kepler(r0 = pos_0_opt, v0 = v_0_opt, tof =10000000000 , mu =MU_ALTAIRA, axes = ax, N=600000)
-                ##        plt.show()
-                print("l'ecriture est évaluée à :")
-                print(r2)
-                print(rp)
-                print(t)
+                 
+                    # --- restaurer la vue ---
+                    ax.set_xlim3d(xlim)
+                    ax.set_ylim3d(ylim)
+                    ax.set_zlim3d(zlim)
+
+                    # --- Supprimer l'ancien point spacecraft ---
+                    if sc_handle is not None:
+                        sc_handle.remove()
+
+                    # --- Ajouter le point spacecraft à t (fin de segment) ---
+                    sc_handle = ax.scatter(
+                        r[0], r[1], r[2],
+                        color='r',
+                        s=40,
+                        label='SC @ t'
+                    )
+    
+                    while True: 
+                        key = plt.waitforbuttonpress()
+                        if key: # True = clavier break
+                            break
+                     
+                    
+                    
+                    
+                #print("l'ecriture est évaluée à :")
+                #print(r2)
+                #print(rp)
+                #print(t)
 
                 # Patched Conics tolerance check
                 rdiff = rp - r2
@@ -1219,11 +1297,11 @@ while True:
                         np.linalg.norm(rdiff),
                         "m",
                     )
-                    # raise Exception('ai')
+                    raise Exception('ai')
                 vdiff = np.linalg.norm(v2 - vp) - np.linalg.norm(vout - vp)
-                print(v2)
-                # print(vf_min_opt)
-                print(vout)
+                #print(v2)
+                #print(vf_min_opt)
+                #print(vout)
                 if np.linalg.norm(vdiff) > 0.0001:
                     print(
                         "planet rendezvous velocity error is above tol :",
@@ -1441,10 +1519,18 @@ while True:
                 v = vout
 
         write_gtoc13_solution("submission.txt", output_table)
-
+    
+      
     # svg des files dans un sous répertoire
     count = count + 1
     if count < 150:
         backup_current_folder()
     else:
         break
+        
+    # If we only have writing or visualize run once
+    if not initial_point_search and not first_legs_search and not sequence_search and not solve_solar_sail_arcs:
+        break
+if Draw_mission:
+    plt.show(block = True)
+    
