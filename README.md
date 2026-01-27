@@ -4,17 +4,21 @@
 This repository contains trajectory optimization code developed for the Global Trajectory Optimization Competition 13 (GTOC13) by the team **Yume Space**.  
 
 This work does **not** reproduce the best-known solution achieved by the *School of Aerospace Engineering, Tsinghua University, Laboratory of Astrodynamics*, which reached a score of 345.216.  
+
 However, this repository explores multiple optimization strategies for the GTOC13 problem and demonstrates how to reach a solution scoring around 50 points with the so called 'Method 1' see hereunder.
 
 
 The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 problem, and will later be complemented by a detailed guide explaining the implemented techniques and modeling choices.
 
 The problem statement and associated data can be found on the following [website](https://gtoc.jpl.net/gtoc13/).
+
 The solution outputed from this script can be validated against the checker available on the website (an account is needed).
+
 
 ---
 
 ## Overview
+
 This project covers several approaches divided in 'methods', including:  
 
 - Method 1 : Classical Minimization techniques --> Nelder-Mead / L-BFGS-B (heavily relies on scipy.minimize lib)
@@ -28,6 +32,7 @@ For the solar sail arcs solving :
 - Indirect optimal-control shooting
 ! Work in progress :) ! 
 
+
 ---
 
 ## Repository Structure
@@ -38,11 +43,14 @@ GTOC13-Trajectory-Optimization/
 ├── missions/            # Problem setup files (GTOC13 configurations)     
 ├── results/             # Example outputs, plots, logs   
 └── README.md            
+
 ```
 
 --- 
 
+
 ## Installation and use
+
 Clone the repository:
 ```bash
 git clone https://github.com/floriancal/GTOC13-Trajectory-Optimization.git'
@@ -50,6 +58,7 @@ python main.py
 ```
 
 Do not hesitate to open main.py to play with the available options (method selection will be placed here in the future).
+
 ---
 
 ## Dependencies 
