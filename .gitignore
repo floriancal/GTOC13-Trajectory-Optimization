@@ -1,0 +1,7 @@
+*.csv
+*.txt
+*.npy
+*.pkl
+*backup_*
+test
+distlink
