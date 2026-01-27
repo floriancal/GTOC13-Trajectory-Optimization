@@ -40,7 +40,7 @@ For the solar sail arcs solving :
 GTOC13-Trajectory-Optimization/   
 │   
 ├── src/                 # Core source code (dynamics, optimization, utilities)   
-├── missions/            # Problem setup files (GTOC13 configurations)     
+├── data/                # Problem setup files (GTOC13 configurations)     
 ├── results/             # Example outputs, plots, logs   
 └── README.md            
 
