@@ -17,8 +17,13 @@ import shutil
 from datetime import datetime
 import threading
 import random
+from poliastro.twobody.orbit import Orbit
+from astropy import units as u
+from poliastro.bodies import Body
 from constants import MU_ALTAIRA, AU, t_max, C, A, m, r0
 from utilities import *
+
+
 
 
 def find_contact(tof, rf, vf, rf_min, MU):
@@ -819,22 +824,33 @@ def min_radius_calc(r1, v1, r2, v2, tof):
     -------
     rmin_norm : float
         Norm of the minimum radius along the orbital arc (meters).
-    more_thn_once : bool
+    more_thn_once : bool 
         do we reach the min more than once ?
     """
     # init to False
     more_thn_once = False
-    el_dep = list(pk.ic2par(r1, v1, MU_ALTAIRA))
-    el_ar = list(pk.ic2par(r2, v2, MU_ALTAIRA))
-
+    
+    Altaira = Body(parent=None, k=MU_ALTAIRA * u.m**3 / u.s**2, name="Altaira")
+  
+    rx = r1 * u.m
+    vx = v1 * u.m / u.s 
+    orb = Orbit.from_vectors(Altaira, rx, vx)
+    el_dep = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+    
+    rx = r2 * u.m
+    vx = v2 * u.m / u.s 
+    orb = Orbit.from_vectors(Altaira, rx, vx)
+    el_ar = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+ 
     # Hyperbolic
     if el_dep[1] > 1:
         if np.sign(el_dep[5]) != np.sign(el_ar[5]):
             el_dep[5] = 0
         else:
             el_dep[5] = min([el_dep[5], el_ar[5]], key=abs)
-        rmin, v = pk.par2ic(el_dep, MU_ALTAIRA)
+        rmin, v = pk.par2ic(el_dep, MU_ALTAIRA)      
         return np.linalg.norm(rmin), more_thn_once
+
 
     # Elliptic
     else:
@@ -846,15 +862,15 @@ def min_radius_calc(r1, v1, r2, v2, tof):
             el_dep[0] ** 3 / MU_ALTAIRA
         ):
             el_dep[5] = 0
-            more_thn_once = True
-
+            more_thn_once = True       
         else:
             E_closest = min([el_dep[5], el_ar[5]], key=dist_to_periapsis)
             el_dep[5] = E_closest
-
+        
+        
+            
         rmin, v = pk.par2ic(el_dep, MU_ALTAIRA)
         return np.linalg.norm(rmin), more_thn_once
-
 
 def dist_to_periapsis(nu):
     return min(abs(nu), abs(2 * np.pi - nu))
