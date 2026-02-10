@@ -5,10 +5,10 @@ This repository contains trajectory optimization code developed for the Global T
 
 This work does **not** reproduce the best-known solution achieved by the *School of Aerospace Engineering, Tsinghua University, Laboratory of Astrodynamics*, which reached a score of 345.216.  
 
-However, this repository explores multiple optimization strategies for the GTOC13 problem and demonstrates how to reach a solution scoring around 50 points with the so called 'Method 1' see hereunder.
+However, this repository explores 3 optimization strategies (for the moment only Method 1 is available) for the GTOC13 problem and demonstrates how to reach a solution scoring around 70 points with the so called 'Method 1' shown hereunder.
 
 
-The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 problem, and will later be complemented by a detailed guide explaining the implemented techniques and modeling choices.
+The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 problem, it will hopefully be complemented by a detailed guide explaining the implemented techniques and modeling choices.
 
 The problem statement and associated data can be found on the following [website](https://gtoc.jpl.net/gtoc13/).
 
@@ -39,9 +39,10 @@ For the solar sail arcs solving :
 ```
 GTOC13-Trajectory-Optimization/   
 │   
-├── src/                 # Core source code (dynamics, optimization, utilities)   
-├── data/                # Problem setup files (GTOC13 configurations)     
+├── data/                # Problem setup files (GTOC13 configurations)   
+├── doc/		 # Methods description (Markdown format)  
 ├── results/             # Example outputs, plots, logs   
+├── src/                 # Core source code 
 └── README.md            
 
 ```

@@ -830,17 +830,22 @@ def min_radius_calc(r1, v1, r2, v2, tof):
     # init to False
     more_thn_once = False
     
-    Altaira = Body(parent=None, k=MU_ALTAIRA * u.m**3 / u.s**2, name="Altaira")
-  
-    rx = r1 * u.m
-    vx = v1 * u.m / u.s 
-    orb = Orbit.from_vectors(Altaira, rx, vx)
-    el_dep = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+    el_dep = list(pk.ic2par(r1, v1, MU_ALTAIRA))
+    el_ar = list(pk.ic2par(r2, v2, MU_ALTAIRA))
     
-    rx = r2 * u.m
-    vx = v2 * u.m / u.s 
-    orb = Orbit.from_vectors(Altaira, rx, vx)
-    el_ar = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+    if np.any(np.isnan(el_dep)) or np.any(np.isnan(el_ar)):
+        Altaira = Body(parent=None, k=MU_ALTAIRA * u.m**3 / u.s**2, name="Altaira")
+      
+        rx = r1 * u.m
+        vx = v1 * u.m / u.s 
+        orb = Orbit.from_vectors(Altaira, rx, vx)
+        el_dep = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+        
+        rx = r2 * u.m
+        vx = v2 * u.m / u.s 
+        orb = Orbit.from_vectors(Altaira, rx, vx)
+        el_ar = [orb.a.value*1000, orb.ecc.value, orb.inc.value, orb.raan.value,  orb.argp.value, orb.nu.value]
+        
  
     # Hyperbolic
     if el_dep[1] > 1:
@@ -1195,9 +1200,49 @@ def build_sequence(
     save_flybys_to_csv(flybys)
     return flybys
 
+def check_max_fb_alt(vin_fb_plf, v_init_lmbrt_plf, planet, dv_req):
+    v_norm = np.linalg.norm(vin_fb_plf)
+    equa = vin_fb_plf @ v_init_lmbrt_plf / v_norm**2
+    if equa >-1 and equa < 1:
+        turn_angle = np.acos(equa)
+        fb_alt = (planet.mu_self / np.sin(turn_angle/2) - planet.mu_self) / v_norm**2  - planet.radius
+        
+        # Constraint violated update of dv_req to take account of it 
+        if fb_alt > 100 * planet.radius:
+            min_turn_angle = np.asin((planet.mu_self / (planet.radius + 100 * planet.radius)) / (v_norm**2 + planet.mu_self / (planet.radius + 100 * planet.radius)))*2                         
+            
+
+            # Unit vector along incoming velocity
+            a_hat = vin_fb_plf / v_norm
+
+            # Projection of desired direction onto plane orthogonal to vin
+            d_perp = v_init_lmbrt_plf - np.dot(v_init_lmbrt_plf, a_hat) * a_hat
+
+            if np.linalg.norm(d_perp) > 0.0:
+                u_hat = d_perp / np.linalg.norm(d_perp)
+            else:
+                # Degenerate case: arbitrary orthogonal direction
+                # (fallback, should be rare)
+                u_hat = np.zeros(3)
+                u_hat[np.argmin(np.abs(a_hat))] = 1.0
+                u_hat -= np.dot(u_hat, a_hat) * a_hat
+                u_hat /= np.linalg.norm(u_hat)
+
+            # Construct the turned velocity (closest to v_init_lmbrt_plf)
+            v_turned = (
+                v_norm
+                * (
+                    np.cos(min_turn_angle) * a_hat
+                    + np.sin(min_turn_angle) * u_hat
+                )
+            )
+            dv_req = np.linalg.norm(v_init_lmbrt_plf - v_turned)
+    else:
+        dv_req = np.inf
+    return dv_req
 
 # Same as get_min_dv but no interpolation on any table(used to finalize the solution)
-def get_min_dv_real(tof, t, max_revs_lmbrt, shield_burned, vin_fb, planet_init, body_j):
+def get_min_dv_real(tof, t, max_revs_lmbrt, shield_burned, vin_fb, planet, body_j):
     """
     Compute the minimum required delta-v for a transfer without interpolation.
 
@@ -1223,9 +1268,9 @@ def get_min_dv_real(tof, t, max_revs_lmbrt, shield_burned, vin_fb, planet_init, 
         (Currently not used.)
     vin_fb : array_like
         Incoming velocity vector at flyby, expressed in the inertial frame.
-    planet_init : object
+    planet : object
         Departure planet ephemeris object providing position and velocity
-        via planet_init.eph(t).
+        via planet.eph(t).
     body_j : object
         Target body ephemeris object providing position and velocity
         via body_j.eph(t).
@@ -1243,7 +1288,7 @@ def get_min_dv_real(tof, t, max_revs_lmbrt, shield_burned, vin_fb, planet_init, 
     dv_min_req = np.inf
 
     # get r1 at L
-    r1, vp_dep = planet_init.eph(t / 86400)
+    r1, vp_dep = planet.eph(t / 86400)
     # get r2 at t + tof --> planet at end of leg
     r2_body_j, v = body_j.eph((t + tof) / 86400)
 
@@ -1271,8 +1316,10 @@ def get_min_dv_real(tof, t, max_revs_lmbrt, shield_burned, vin_fb, planet_init, 
                 v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
 
                 # 1) delta-v requis
-                dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
-
+                dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet)
+                # We need to check if the proposed flyby has a radius <100 * body radius (this constraint is not embededed in pk.fb_vel however fb alt > 1.1 body radius is.)
+                dv_req = check_max_fb_alt(vin_fb_plf, v_init_lmbrt_plf, planet, dv_req)
+                   
                 if dv_req < dv_min_req:
                     dv_min_req = dv_req
 
@@ -1351,6 +1398,10 @@ def minimize_lmbrt_dv(
                 v_init_lmbrt_plf = np.array(v1) - np.array(vp)
                 # 1) delta-v requis
                 dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet)
+                
+                # We need to check if the proposed flyby has a radius <100 * body radius (this constraint is not embededed in pk.fb_vel however fb alt > 1.1 body radius is.)
+                dv_req = check_max_fb_alt(vin_fb_plf, v_init_lmbrt_plf, planet, dv_req)                
+                
                 if dv_req < dv_req_best:
                     dv_req_best = dv_req
     return dv_req_best
@@ -1398,6 +1449,10 @@ def update_lmbrt_params(
                 v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
                 # 1) delta-v requis
                 dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
+                
+                # We need to check if the proposed flyby has a radius <100 * body radius (this constraint is not embededed in pk.fb_vel however fb alt > 1.1 body radius is.)
+                dv_req = check_max_fb_alt(vin_fb_plf, v_init_lmbrt_plf, planet_init, dv_req)
+                
                 if dv_req < dv_req_best:
                     dv_req_best = dv_req
                     v1_best = v1
@@ -1417,7 +1472,7 @@ def get_min_dv(
     MU_ALTAIRA,
     max_revs_lmbrt,
     shield_burned,
-    planet_init,
+    planet,
     body_j,
     n_period,
     period,
@@ -1448,7 +1503,7 @@ def get_min_dv(
     shield_burned : bool
         Current thermal shield state (not used directly in this function,
         but kept for interface consistency).
-    planet_init : pykep.planet
+    planet : pykep.planet
         Departure planet object.
     body_j : pykep.planet
         Target body object at the end of the Lambert leg.
@@ -1483,14 +1538,14 @@ def get_min_dv(
         tof = 1
 
     vin_fb, t, pos = get_vin_fb_t(
-        par, V0, VFMIN, L, t_list, pos_list, planet_init, MU_ALTAIRA, period
+        par, V0, VFMIN, L, t_list, pos_list, planet, MU_ALTAIRA, period
     )
 
     dv_min_req = 1e10
 
     # get r1 at L
 
-    r1, vp_dep = planet_init.eph(t / 86400)
+    r1, vp_dep = planet.eph(t / 86400)
     # get r2 at t + tof --> planet at end of leg
     r2_body_j, v = body_j.eph((t + tof + period * n_period) / 86400)
 
@@ -1512,10 +1567,11 @@ def get_min_dv(
             v_init_lmbrt_plf = np.array(v1) - np.array(vp_dep)
 
             # 1) delta-v requis
-
-            dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet_init)
-            # eq,ineq = pk.fb_con(vin_fb_plf, v_init_lmbrt_plf, planet_init)
-
+            dv_req = pk.fb_vel(vin_fb_plf, v_init_lmbrt_plf, planet)
+            
+            # We need to check if the proposed flyby has a radius <100 * body radius (this constraint is not embededed in pk.fb_vel however fb alt > 1.1 body radius is.)
+            dv_req = check_max_fb_alt(vin_fb_plf, v_init_lmbrt_plf, planet, dv_req)
+                
             if dv_req < dv_min_req:
                 dv_min_req = dv_req
 

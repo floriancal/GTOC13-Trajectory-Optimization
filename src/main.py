@@ -4,9 +4,9 @@ from collections import defaultdict
 import csv
 import pykep as pk
 import matplotlib.pyplot as plt
-import orbital
 from utilities import *
 from orbital import *
+from plot_utilities import *
 from scipy.optimize import minimize
 import os
 import pickle
@@ -35,14 +35,12 @@ V0_max = 50000
 
 # What to execute
 initial_point_search = False  # Not to be runned each time, this builds a table of velocity/position and times vectors at first body encounter as a function of the initial state of the problem
-first_legs_search = (
-    True  # Wether to compute or reuse the choice of the two firsts conic legs
-)
-sequence_search = True  # Wether to run the flybys sequence search or not
+first_legs_search = False  # Wether to compute or reuse the choice of the two firsts conic legs
+sequence_search = False  # Wether to run the flybys sequence search or not
 only_conics = True  # If running a sequence search and orbital reduction legs choose to consider only conic arcs or not (use the sail or not)
 
 # For now the solve_solar_sail_arcs capabilty is not available arcs must be conics, nevertheless the structure has been prepared
-solve_solar_sail_arcs = False  # Wether to run the solving of the sail arcs (must at least be runned once after a sequence search even in only_conics for Xcheck)
+solve_solar_sail_arcs = True  # Wether to run the solving of the sail arcs (must at least be runned once after a sequence search even in only_conics for Xcheck)
 only_refine = False  # Wether to only run the refinement of the solar sail solving of controlled arcs (the solving process is divided in two steps)
 Write_GTOC_output_file = True  # Wether to prepare the GTOC format solution file or not
 Draw_mission = True  # at the end of the run draw the trajectory on a 3D plot
@@ -74,9 +72,9 @@ if sequence_search == True:
 tol_pos = 50
 
 # Loading all the objects
-planets = load_bodies_from_csv("gtoc13_planets.csv")
-asteroids = load_bodies_from_csv("gtoc13_asteroids.csv", mu_default=0.0)
-comets = load_bodies_from_csv("gtoc13_comets.csv", mu_default=0.0)
+planets = load_bodies_from_csv("../data/gtoc13_planets.csv")
+asteroids = load_bodies_from_csv("../data/gtoc13_asteroids.csv", mu_default=0.0)
+comets = load_bodies_from_csv("../data/gtoc13_comets.csv", mu_default=0.0)
 
 # Fusion en un seul dictionnaire
 bodies = {**planets, **asteroids, **comets}
@@ -596,6 +594,7 @@ while True:
                 break
 
     # Writing of the submission file
+    traj_plot = list()
     if Write_GTOC_output_file or Draw_mission:
         shield_burned = False
 
@@ -605,7 +604,7 @@ while True:
             sc_handle = None
 
             # lets check trajectory visually at each run
-            planets = load_bodies_from_csv("gtoc13_planets.csv")
+            planets = load_bodies_from_csv("../data/gtoc13_planets.csv")
 
             plt.ion()
             ax = None
@@ -680,7 +679,7 @@ while True:
                         bodies[body_id].mu_self,
                     )
                 )
-
+            
             if conic:
 
                 # Check Altaira proximity constraints
@@ -699,7 +698,9 @@ while True:
 
                 def round_sig(x, sig=16):
                     return float(f"{x:.{sig}g}")
-
+                
+                r_old = r
+                v_old = v 
                 r = r2
                 v = v2
 
@@ -715,7 +716,18 @@ while True:
                     xlim = ax.get_xlim3d()
                     ylim = ax.get_ylim3d()
                     zlim = ax.get_zlim3d()
-
+                    
+                    # Store pos_vector for html visualization
+                    rPLOT = list(np.array(r_old))
+                    vPLOT = list(np.array(v_old))
+                    NPOINTS = 100
+                    for ind in range(1, NPOINTS+1 ):
+                        rPLOT, vPLOT = pk.propagate_lagrangian(
+                            r0=rPLOT, v0=vPLOT, tof=tof /NPOINTS, mu=MU_ALTAIRA
+                        )
+                        traj_plot.append((i, t-tof + ind *tof/NPOINTS, rPLOT))
+                    
+                    
                     # Plot spacecraft
                     pk.orbit_plots.plot_kepler(
                         r, v, -tof, MU_ALTAIRA, axes=ax, N=6000, color="g"
@@ -723,6 +735,7 @@ while True:
                     print(
                         "At flyby : ", i + 1, "Score is :", objective(flybys[0 : i + 1])
                     )
+                    
 
                     # Restore vue
                     ax.set_xlim3d(xlim)
@@ -752,12 +765,8 @@ while True:
                         "m",
                     )
                     raise Exception("ai")
-                # print('rdiff', np.linalg.norm(rdiff))
-                # print('rt',rt)
-                # print('rfile propag with file data ', rfile)
-                # print('Check ', r_check)
+
                 vdiff = np.linalg.norm(v2 - vp) - np.linalg.norm(vout - vp)
-                print("check")
                 if np.linalg.norm(vdiff) > 0.0001:
                     print(
                         "planet rendezvous velocity error is above tol :",
@@ -971,11 +980,16 @@ while True:
 
     # svg of files in subdirectory
     count = count + 1
+    J_final = objective(flybys)
     if count < 150:
-        backup_current_folder()
+        backup_current_folder(J_final)
     else:
         break
-
+    
+    if Draw_mission:
+        build_html_3D_anim(traj_plot, planets)
+    
+    
     # If we only have writing or visualize run once
     if (
         not initial_point_search
@@ -986,39 +1000,5 @@ while True:
         break
 if Draw_mission:
     plt.show(block=True)
-
-
-# test propag
-# print('r',r)
-# print('v',v)
-
-# rx=[-29919574138.20000076293945312, 33899323.20443549007177353, -0.00020453717028339]
-# vx= [44.25375530199427487, 0.00000000000000000, 0.00000000000000000]
-# tofx=676964354.22120845317840576 - 8465369.55306994915008545,
-# rx = [round_sig(x, 11) for x in rx]
-# vx = [round_sig(x, 11) for x in vx]
-##tofx = round_sig(tof, 11)
-# print(tofx)
-
-# rt, vt = pk.propagate_lagrangian(r0=r, v0=v, tof=tof, mu=MU_ALTAIRA)
-# rfile,vfile = pk.propagate_lagrangian(r0=rx, v0=vx, tof=tofx, mu=139348062043.343)
-
-
-# from poliastro.twobody.orbit import Orbit
-# from poliastro.twobody.propagation import propagate
-# from astropy import units as u
-# from astropy.time import TimeDelta
-# from poliastro.bodies import Body
-# from poliastro.twobody.propagation import cowell
-
-# rx = r * u.m
-# vx = v * u.m / u.s
-# tofi = tof * u.s
-# Altaira = Body(parent=None, k=MU_ALTAIRA * u.m**3 / u.s**2, name="Altaira")
-
-# orb = Orbit.from_vectors(Altaira, rx, vx)
-# orb_f = propagate(orb, TimeDelta(tofi), method=cowell,
-# rtol=1e-11)
-
-# r_check = orb_f.r.to(u.m).value
-# v_check = orb_f.v.to(u.m/u.s).value
+    
+   

@@ -170,7 +170,7 @@ def read_init_pos(filename="init_pos.csv"):
     return shield_burned, V0_list, VFMIN_list, L_list, tp_list, pos_list
 
 
-def backup_current_folder():
+def backup_current_folder(J_final):
     """
     Create a timestamped backup of selected files in the current directory.
 
@@ -193,20 +193,22 @@ def backup_current_folder():
       `shutil.copy`.
     - Progress information is printed to standard output.
     """
+    
+    J_int = round(J_final)
 
-    # 1) Timestamp
+    # 1) Timestamp 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 2) Nom du sous-dossier
-    backup_dir = f"backup_{timestamp}"
+    # 2) Name of subfolder
+    backup_dir = f"backup_{timestamp}_J_{J_int}"
 
-    # 3) Crée le dossier
+    # 3) Create it
     os.makedirs(backup_dir, exist_ok=True)
 
-    # 4) Extensions à copier
+    # 4) what to include
     exts = (".csv", ".txt", ".npy")
 
-    # 5) Parcours du dossier courant
+    # 5) from current folder
     for file in os.listdir("."):
         if file.lower().endswith(exts) and os.path.isfile(file):
             shutil.copy(file, os.path.join(backup_dir, file))

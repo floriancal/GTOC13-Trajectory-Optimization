@@ -6,3 +6,4 @@ src/*.pkl
 test/
 src/distlink/
 __pycache__/
+src/public/
