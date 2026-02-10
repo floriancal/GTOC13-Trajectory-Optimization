@@ -5,7 +5,7 @@ This repository contains trajectory optimization code developed for the Global T
 
 This work does **not** reproduce the best-known solution achieved by the *School of Aerospace Engineering, Tsinghua University, Laboratory of Astrodynamics*, which reached a score of 345.216.  
 
-However, this repository explores 3 optimization strategies (for the moment only Method 1 is available) for the GTOC13 problem and demonstrates how to reach a solution scoring around 70 points with the so called 'Method 1' shown hereunder.
+However, this repository explores 3 optimization strategies (for the moment only Method 1 is available) for the GTOC13 problem and demonstrates how to reach a solution scoring around 75 points with the so called 'Method 1' shown hereunder.
 
 
 The repository compares several methods and is intended as an experimentation toolbox for the GTOC13 problem, it will hopefully be complemented by a detailed guide explaining the implemented techniques and modeling choices.
@@ -49,6 +49,11 @@ GTOC13-Trajectory-Optimization/
 
 --- 
 
+## Results 
+Under results/ folder are listed some obtained solution. The submission.txt file is the file format requested by the GTOC13 checker and the file has been validated against it. 
+The html file contains a 3D animation of the solutions (do not hesitate to zoom and pan while running the sim but avoid rotational button as they usually makes things messy to watch). 
+
+The 75 points solution html file is [here](results\Method_1_J75\Simulation.html) 
 
 ## Installation and use
 

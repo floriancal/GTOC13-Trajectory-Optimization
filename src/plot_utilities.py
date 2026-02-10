@@ -177,4 +177,4 @@ def build_html_3D_anim(traj_plot, planets):
             ))
 
 
-    fig.write_html("public/index.html", include_plotlyjs="cdn", auto_play = False)
+    fig.write_html("3D_sim.html", include_plotlyjs="cdn", auto_play = False)

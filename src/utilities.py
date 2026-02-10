@@ -206,7 +206,7 @@ def backup_current_folder(J_final):
     os.makedirs(backup_dir, exist_ok=True)
 
     # 4) what to include
-    exts = (".csv", ".txt", ".npy")
+    exts = (".csv", ".txt", ".npy", ".html")
 
     # 5) from current folder
     for file in os.listdir("."):
