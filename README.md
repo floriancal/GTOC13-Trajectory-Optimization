@@ -75,12 +75,18 @@ Do not hesitate to open main.py to play with the available options (method selec
 ---
 
 ## Dependencies 
-This project depends on the PyKEP library, released under the GPL license, which can be installed from the following [PyKep Documentation](https://esa.github.io/pykep/)
+This project depends on :   
+
+Mandatory : 
+- The PyKEP library, released under the GPL license, which can be installed from the following [PyKep Documentation](https://esa.github.io/pykep/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2575462.svg)](https://doi.org/10.5281/zenodo.2575462)
 Dario Izzo. (2019). esa/pykep: Bug fixes and more support on Equinoctial Elements (v2.3). Zenodo. https://doi.org/10.5281/zenodo.2575462
 
-Distlink available [here](https://github.com/maxiimilian/distlink)
+- Poliastro [![DOI](https://zenodo.org/records/6817189)]
 
+Additional : 
+- Plotly for visualization hanled via pip : Plotly Technologies Inc. Collaborative data science. Montréal, QC, 2015. https://plot.ly.
+- Matplotlib  for visualization hanled via pip :
 ---
 
 

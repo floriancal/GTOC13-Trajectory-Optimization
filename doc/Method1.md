@@ -97,7 +97,7 @@ Note :
 
 
 This methodology is then repeated N_times as the randomness in the process always lead to differents sequence and so different scores. 
-The algorithm has been able to obtain a score of around 70 points and score over 40 points are usually obtained within 10 iterations 
+The algorithm has been able to obtain a score of around 75 points and score over 40 points are usually obtained within 10 iterations 
 Some or those case are stored in the results folder of this repo. 
 
 

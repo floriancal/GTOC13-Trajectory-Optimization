@@ -3,7 +3,6 @@ import numpy as np
 import csv
 from collections import defaultdict
 import pykep as pk
-from distlink import COrbitData, MOID_fast
 import orbital
 from scipy.integrate import solve_ivp
 import re
