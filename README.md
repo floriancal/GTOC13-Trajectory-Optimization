@@ -82,15 +82,15 @@ Mandatory :
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2575462.svg)](https://doi.org/10.5281/zenodo.2575462)
 Dario Izzo. (2019). esa/pykep: Bug fixes and more support on Equinoctial Elements (v2.3). Zenodo. https://doi.org/10.5281/zenodo.2575462
 
-- Poliastro [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.6817189.svg)](https://doi.org/10.5281/zenodo.6817189)
+- Poliastro [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.6817189.svg)](https://doi.org/10.5281/zenodo.6817189) for orbital mechanics
 
-- [Orbital](https://github.com/RazerM/orbital)
+- [Orbital](https://github.com/RazerM/orbital) for orbital mechanics
 
-- [Numba](https://numba.pydata.org/)
+- [Numba](https://numba.pydata.org/) to speed up computations.
 
 Additional : 
-- [Plotly](https://plotly.com/) for visualization hanled via pip : Plotly Technologies Inc. Collaborative data science. Montréal, QC, 2015.
-- [Matplotlib](https://matplotlib.org/) for visualization hanled via pip
+- [Plotly](https://plotly.com/) : for visualization, Plotly Technologies Inc. Collaborative data science. Montréal, QC, 2015.
+- [Matplotlib](https://matplotlib.org/) for visualization.
 
 
 
