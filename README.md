@@ -53,7 +53,7 @@ GTOC13-Trajectory-Optimization/
 Under results/ folder are listed some obtained solution. The submission.txt file is the file format requested by the GTOC13 checker and the file has been validated against it. 
 The html file contains a 3D animation of the solutions (do not hesitate to zoom and pan while running the sim but avoid rotational button as they usually makes things messy to watch). 
 
-The 75 points solution html file is visible to watch [here](https://floriancal.github.io/GTOC13-Trajectory-Optimization/results/Method_1_J75/Simulation.html)
+The 75 points solution html file is visible to watch [here](https://floriancal.github.io/GTOC13-Trajectory-Optimization/results/Method_1_J75/3D_sim.html)
 and can be found in the results folder.
 
 Here is the gif version : 
@@ -92,7 +92,8 @@ Additional :
 - [Plotly](https://plotly.com/) : for visualization, Plotly Technologies Inc. Collaborative data science. Montréal, QC, 2015.
 - [Matplotlib](https://matplotlib.org/) for visualization.
 
-
+It is better to install pykep via conda as mentionned in the documentation, for the other dependencies pip requirements files are available at the project root 
+[requirements.txt](requirements.txt)
 
 ---
 
