@@ -53,7 +53,14 @@ GTOC13-Trajectory-Optimization/
 Under results/ folder are listed some obtained solution. The submission.txt file is the file format requested by the GTOC13 checker and the file has been validated against it. 
 The html file contains a 3D animation of the solutions (do not hesitate to zoom and pan while running the sim but avoid rotational button as they usually makes things messy to watch). 
 
-The 75 points solution html file is [here](https://htmlpreview.github.io/?https://github.com/floriancal/GTOC13-Trajectory-Optimization/tree/main/results/Method_1_J75/Simulation.html) 
+The 75 points solution html file is visible to watch [here](https://floriancal.github.io/GTOC13-Trajectory-Optimization/results/Method_1_J75/Simulation.html)
+and can be found in the results folder.
+
+Here is the gif version : 
+
+![Demo](results/Method_1_J75/demo.gif)
+
+
 
 ## Installation and use
 

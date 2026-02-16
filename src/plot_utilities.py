@@ -60,7 +60,7 @@ def build_html_3D_anim(traj_plot, planets):
                         label="Fast",
                         method="animate",
                         args=[None, dict(
-                            frame=dict(duration=5, redraw=True),
+                            frame=dict(duration=1, redraw=True),
                             transition=dict(duration=0),
                             mode="immediate"
                         )]
@@ -125,22 +125,19 @@ def build_html_3D_anim(traj_plot, planets):
         frames.append(go.Frame(
             data=[
                 *planet_traces,
-                go.Scatter3d(
+                 go.Scatter3d(
                     x=x_sc[:i+1],
                     y=y_sc[:i+1],
                     z=z_sc[:i+1],
                     mode="lines",
-                    line=dict(width=4, color="red")
-                )
-            ],
+                    line=dict(width=4, color="red"),
+                    )],
             layout=dict(
                 scene=dict(
                 camera=camera
-                ),
-    ),
-
-            name=str(i)
-        ))
+            ),
+            ),
+            ))
         
     # Planets intial pos
     initial_planet_pos = []
@@ -152,7 +149,7 @@ def build_html_3D_anim(traj_plot, planets):
             z=[float(r_p[2])],
             mode="markers",
             marker=dict(size=6),
-            name=planet.name
+            showlegend=False
         ))
 
     # Initial figure (frame 0)
@@ -161,6 +158,17 @@ def build_html_3D_anim(traj_plot, planets):
     frames=frames,
     layout=layout
     )
+    
+    
+    fig.add_trace(go.Scatter3d(
+    x=[x_sc[0]],
+    y=[y_sc[0]],
+    z=[z_sc[0]],
+    mode="lines",
+    line=dict(width=4, color="red"),
+    name="S/C",
+    showlegend=True
+    ))
 
     # Planets orbits
     for planet in planets.values():
@@ -175,6 +183,8 @@ def build_html_3D_anim(traj_plot, planets):
                 name=f"{planet.name} orbit",
                 showlegend=True
             ))
+    
+
 
 
     fig.write_html("3D_sim.html", include_plotlyjs="cdn", auto_play = False)
